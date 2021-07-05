@@ -3,12 +3,12 @@ from utils.Encoder import Encoder
 
 
 class EpilepsyEncoder(tf.keras.Model):
-    def __init__(self, num_layers, d_model, num_heads, dff, input_vocab_size,
+    def __init__(self, num_layers, d_model, num_heads, dff,
                  target_size, pe_input, rate=0.1):
         super(EpilepsyEncoder, self).__init__()
 
         self.tokenizer = Encoder(num_layers, d_model, num_heads, dff,
-                                 input_vocab_size, pe_input, rate)
+                                 pe_input, rate)
 
         self.final_layer = tf.keras.layers.Dense(target_size, activation='softmax')
 
