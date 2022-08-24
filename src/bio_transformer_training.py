@@ -3,7 +3,7 @@ import scipy.io
 import pandas as pd
 import json
 import pickle
-from utils.BioT import BioTransformer, Epilepsy60Dataset, ImbalancedDataSampler
+from utils.BioT import BioTransformer, Epilepsy60Dataset, ImbalancedDataSampler, EvaluateSampler
 import torch
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader, TensorDataset
@@ -12,6 +12,7 @@ from torch.optim import SGD, Adam
 from tqdm import tqdm
 import torch.nn.functional as F
 from sklearn.metrics import confusion_matrix
+from utils.BioT import SEQ_LEN
 
 
 def set_labels(x):
@@ -44,7 +45,7 @@ def get_data():
                 X[mode] = np.concatenate((X[mode], data), axis=0)
             y = df_file_name.loc[t_file, 'labels']
             labels[mode] = np.concatenate((labels[mode], np.expand_dims(y, axis=1)))
-            valid_index = np.arange(start=valid_labels[mode].shape[0] + 59,
+            valid_index = np.arange(start=valid_labels[mode].shape[0] + SEQ_LEN-1,
                                     stop=valid_labels[mode].shape[0] + y.shape[0])
             valid_labels[mode] = np.concatenate((valid_labels[mode], valid_index))
     print(X["train"].shape)
@@ -66,7 +67,7 @@ def train():
     d_model = 768
     n_heads = 12
     d_hid = 4 * d_model
-    seq_len = 61
+    seq_len = SEQ_LEN+1
     n_layers = 12
     n_out = 2
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -89,16 +90,17 @@ def train():
     print(X_train.shape, Y.shape)
     train_set = Epilepsy60Dataset(torch.from_numpy(X_train).float(), torch.from_numpy(Y).long())
     sampler = ImbalancedDataSampler(torch.from_numpy(valid_seizures), torch.from_numpy(valid_non_seizure))
-    train_loader = DataLoader(train_set, batch_size=32, sampler=sampler, num_workers=4)
+    train_loader = DataLoader(train_set, batch_size=16, sampler=sampler, num_workers=4)
 
     val_set = Epilepsy60Dataset(torch.from_numpy(X_val).float(), torch.from_numpy(Y_val).long())
-    val_loader = DataLoader(val_set, batch_size=16, shuffle=False)
+    val_sampler = EvaluateSampler(torch.from_numpy(valid_labels['val']).int())
+    val_loader = DataLoader(val_set, shuffle=False, sampler=val_sampler)
 
     # Training loop
     optimizer = SGD(model.parameters(), lr=0.01)
     criterion = CrossEntropyLoss()
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.95)
-    N_EPOCHS = 50
+    N_EPOCHS = 20
     train_loss_list = []
     val_loss_list = []
 
@@ -139,8 +141,8 @@ def train():
         print(f"Epoch {epoch + 1}/{N_EPOCHS} Training loss: {train_loss/len(train_loader):.2f} ")
         train_loss_list.append(train_loss/len(train_loader))
 
-    torch.save(model, '../output/model60_n{}'.format(n_layers))
-    torch.save(model.state_dict(), '../output/model60_state_n{}'.format(n_layers))
+    torch.save(model, '../output/model{}_n{}'.format(SEQ_LEN, n_layers))
+    torch.save(model.state_dict(), '../output/model{}_state_n{}'.format(SEQ_LEN, n_layers))
     print("Validation_loss_list = ", val_loss_list)
     print("Train_loss_list = ", train_loss_list)
 
@@ -152,9 +154,10 @@ def evaluate():
     Y = labels["test"]
 
     test_set = Epilepsy60Dataset(torch.from_numpy(X_test).float(), torch.from_numpy(Y).long())
-    test_loader = DataLoader(test_set, batch_size=16, shuffle=False)
+    test_sampler = EvaluateSampler(torch.from_numpy(valid_labels['test']).int())
+    test_loader = DataLoader(test_set, batch_size=16, shuffle=False, sampler=test_sampler)
 
-    model = torch.load('../output/model60_n16')
+    model = torch.load('../output/model{}_n12'.format(SEQ_LEN))
     model.eval()
     test_predict = []
     test_labels = []
@@ -180,7 +183,12 @@ def evaluate():
             # print('correct :{}'.format( (predicted == labels.view(-1,)).sum().item()))
 
     # print(f'Accuracy of the network on the test data: {100 * correct // total} %')
-    print("Confusion: ", confusion_matrix(test_labels, test_predict))
+    conf =  confusion_matrix(test_labels, test_predict)
+    print("Confusion: ", conf)
+    conf_normal = conf / np.expand_dims(conf.astype(np.float).sum(axis=1), 1)
+    sens = conf_normal[1, 1] / (conf_normal[1, 1] + conf_normal[0, 1])
+    spec = conf_normal[1, 1] / (conf_normal[1, 1] + conf_normal[1, 0])
+    print("Sensitivity: {:.2f}, Specificity: {:.2f}".format(sens, spec))
 
 
 if __name__ == '__main__':

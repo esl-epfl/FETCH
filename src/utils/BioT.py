@@ -8,6 +8,8 @@ from torch.utils.data.sampler import Sampler
 import torch.nn.functional as F
 torch.manual_seed(1)
 
+SEQ_LEN = 300
+
 
 class BioTransformer(nn.Module):
 
@@ -104,13 +106,13 @@ class Epilepsy60Dataset(Dataset):
         # if torch.is_tensor(idx):
         #     idx = idx.tolist()
 
-        if idx<59:
+        if idx<SEQ_LEN:
             # x60_zero = np.zeros((59-idx, self.x_total.shape[1]), dtype=np.float)
             # x60 = np.concatenate((x60_zero, self.x_total[0:idx+1, :]))
-            x60 = self.x_total[0:60, :]
-            y60 = self.y_total[60]
+            x60 = self.x_total[0:SEQ_LEN, :]
+            y60 = self.y_total[SEQ_LEN]
         else:
-            x60 = self.x_total[idx-59:idx+1, :]
+            x60 = self.x_total[idx-SEQ_LEN+1:idx+1, :]
             y60 = self.y_total[idx]
 
         sample = {'x': x60, 'y':y60}
@@ -131,4 +133,16 @@ class ImbalancedDataSampler(Sampler):
 
     def __len__(self):
         return 2*self.num_seizure
+
+
+class EvaluateSampler(Sampler):
+    def __init__(self, valid_indices):
+        super().__init__(valid_indices)
+        self.valid_indices = valid_indices
+
+    def __iter__(self):
+        return iter(self.valid_indices)
+
+    def __len__(self):
+        return len(self.valid_indices)
 
