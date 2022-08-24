@@ -39,7 +39,7 @@ def get_data():
     valid_labels = {'train': np.zeros(0), 'test': np.zeros(0), 'val': np.zeros(0)}
     dataset = {'train': training_set, 'test': test_set, 'val': validation_set}
     for mode in ['train', 'test', 'val']:
-        for t_file in dataset[mode]:
+        for t_file in dataset[mode][:1]:
             with open('../input/Epilepsiae_info/{}_zc.pickle'.format(t_file), 'rb') as pickle_file:
                 data = pickle.load(pickle_file)
                 X[mode] = np.concatenate((X[mode], data), axis=0)
@@ -94,7 +94,7 @@ def train():
 
     val_set = Epilepsy60Dataset(torch.from_numpy(X_val).float(), torch.from_numpy(Y_val).long())
     val_sampler = EvaluateSampler(torch.from_numpy(valid_labels['val']).int())
-    val_loader = DataLoader(val_set, shuffle=False, sampler=val_sampler)
+    val_loader = DataLoader(val_set, shuffle=False, sampler=val_sampler, batch_size=16)
 
     # Training loop
     optimizer = SGD(model.parameters(), lr=0.01)
@@ -121,25 +121,26 @@ def train():
             loss.backward()
             # torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
             optimizer.step()
-        model.train(False)
-        running_vloss = 0.0
-        for i, vdata in enumerate(val_loader):
-            vinputs, vlabels = vdata['x'], vdata['y']
-            vinputs, vlabels = vinputs.to(device), vlabels.to(device)
-            vinputs = torch.transpose(vinputs, 0, 1)
-            voutputs = model(vinputs)
-            vloss = criterion(voutputs[-1, :, :], vlabels.view(-1, ))
-            running_vloss += vloss.detach().cpu().item()
 
-        avg_vloss = running_vloss/ len(val_loader)
-        print('LOSS valid {}'.format(avg_vloss))
-        val_loss_list.append(avg_vloss)
+        with torch.no_grad():
+            running_vloss = 0.0
+            for i, vdata in enumerate(val_loader):
+                vinputs, vlabels = vdata['x'], vdata['y']
+                vinputs, vlabels = vinputs.to(device), vlabels.to(device)
+                vinputs = torch.transpose(vinputs, 0, 1)
+                voutputs = model(vinputs)
+                vloss = criterion(voutputs[-1, :, :], vlabels.view(-1, ))
+                running_vloss += vloss.detach().cpu().item()
 
-        scheduler.step()
-        lr = scheduler.get_last_lr()[0]
+            avg_vloss = running_vloss/ len(val_loader)
+            print('LOSS valid {}'.format(avg_vloss))
+            val_loss_list.append(avg_vloss)
 
-        print(f"Epoch {epoch + 1}/{N_EPOCHS} Training loss: {train_loss/len(train_loader):.2f} ")
-        train_loss_list.append(train_loss/len(train_loader))
+            scheduler.step()
+            lr = scheduler.get_last_lr()[0]
+
+            print(f"Epoch {epoch + 1}/{N_EPOCHS} Training loss: {train_loss/len(train_loader):.2f} ")
+            train_loss_list.append(train_loss/len(train_loader))
 
     torch.save(model, '../output/model{}_n{}'.format(SEQ_LEN, n_layers))
     torch.save(model.state_dict(), '../output/model{}_state_n{}'.format(SEQ_LEN, n_layers))
@@ -183,7 +184,7 @@ def evaluate():
             # print('correct :{}'.format( (predicted == labels.view(-1,)).sum().item()))
 
     # print(f'Accuracy of the network on the test data: {100 * correct // total} %')
-    conf =  confusion_matrix(test_labels, test_predict)
+    conf = confusion_matrix(test_labels, test_predict)
     print("Confusion: ", conf)
     conf_normal = conf / np.expand_dims(conf.astype(np.float).sum(axis=1), 1)
     sens = conf_normal[1, 1] / (conf_normal[1, 1] + conf_normal[0, 1])
