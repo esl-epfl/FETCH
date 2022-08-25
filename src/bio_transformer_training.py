@@ -1,8 +1,11 @@
+import math
+
 import numpy as np
 import scipy.io
 import pandas as pd
 import json
 import pickle
+import seaborn as sns
 from utils.BioT import BioTransformer, Epilepsy60Dataset, ImbalancedDataSampler, EvaluateSampler, PatientDiscriminatorDataset
 import torch
 import matplotlib.pyplot as plt
@@ -26,6 +29,7 @@ def get_data():
     df['onsets'] = df['onsets'].apply(lambda x: json.loads(x.replace('\n', ',')))
     df['offsets'] = df['offsets'].apply(lambda x: json.loads(x.replace('\n', ',')))
     df.apply(set_labels, axis=1)
+    df = df.groupby('patient').head(1)
     df = df.sort_values(by='patient')
 
     test_set = [x for x in df['file_name'].tolist() if x.startswith('Patient_1_')]
@@ -39,7 +43,7 @@ def get_data():
     dataset = {'train': training_set, 'test': test_set, 'val': validation_set}
     pat_start_end = {new_list: [] for new_list in range(30)}
     for mode in ['train', 'test', 'val']:
-        for t_file in dataset[mode]:
+        for t_file in dataset[mode][:31]:
             with open('../input/Epilepsiae_info/{}_zc.pickle'.format(t_file), 'rb') as pickle_file:
                 data = pickle.load(pickle_file)
                 X[mode] = np.concatenate((X[mode], data), axis=0)
@@ -220,6 +224,14 @@ def pretrain():
     torch.save(model.state_dict(), '../output/pre_model{}_state_n{}'.format(SEQ_LEN, n_layers))
 
 
+def print_results(conf):
+    print("Confusion: ", conf)
+    conf_normal = conf / np.expand_dims(conf.astype(np.float).sum(axis=1), 1)
+    sens = conf_normal[1, 1] / (conf_normal[1, 1] + conf_normal[0, 1])
+    spec = conf_normal[1, 1] / (conf_normal[1, 1] + conf_normal[1, 0])
+    print("Sensitivity: {:.2f}, Specificity: {:.2f}".format(sens, spec))
+
+
 def evaluate():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     X, labels, valid_labels, _ = get_data()
@@ -257,14 +269,75 @@ def evaluate():
 
     # print(f'Accuracy of the network on the test data: {100 * correct // total} %')
     conf = confusion_matrix(test_labels, test_predict)
-    print("Confusion: ", conf)
-    conf_normal = conf / np.expand_dims(conf.astype(np.float).sum(axis=1), 1)
-    sens = conf_normal[1, 1] / (conf_normal[1, 1] + conf_normal[0, 1])
-    spec = conf_normal[1, 1] / (conf_normal[1, 1] + conf_normal[1, 0])
-    print("Sensitivity: {:.2f}, Specificity: {:.2f}".format(sens, spec))
+    print_results(conf)
+
+
+def evaluate_pretraining():
+    activation = {}
+
+    def get_activation(name):
+        def hook(model, input, output):
+            activation[name] = output.detach()
+
+        return hook
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    X, labels, valid_labels, pat_start_end = get_data()
+    X_train = X["train"]
+
+    train_start_end = []
+    for p in range(2, 30):
+        train_start_end.append((pat_start_end[p][0][0], pat_start_end[p][-1][-1]))
+
+    test_set = PatientDiscriminatorDataset(torch.from_numpy(X_train).float(), train_start_end)
+    test_sampler = EvaluateSampler(torch.from_numpy(valid_labels['train']).int())
+    test_loader = DataLoader(test_set, batch_size=16, shuffle=False, sampler=test_sampler)
+
+    model = torch.load('../output/pre_model{}_n8'.format(SEQ_LEN))
+    print(model)
+    model.encoder.register_forward_hook(get_activation('encoder'))
+    model.pos_encoder.register_forward_hook(get_activation('pos_encoder'))
+
+    model.eval()
+    test_predict = []
+    test_labels = []
+
+    # since we're not training, we don't need to calculate the gradients for our outputs
+    with torch.no_grad():
+        for batch in tqdm(test_loader, position=0, leave=True):
+            x1, x2, y = batch['x1'], batch['x2'], batch['y']
+            x1, x2, y = x1.to(device), x2.to(device), y.to(device)
+            x1 = torch.transpose(x1, 0, 1)
+            x2 = torch.transpose(x2, 0, 1)
+            y_hat = model(x1, x2)[-1,:,:]
+            _, predicted = torch.max(y_hat.data, 1)
+            # print('predicted: {}'.format(predicted))
+            test_predict += predicted.tolist()
+            test_labels += y.view(-1, ).tolist()
+
+            # same_sample = np.where(y.cpu().numpy() == 0)[0][0]
+            # diff_sample = np.where(y.cpu().numpy() == 1)[0][0]
+
+            # print(activation['pos_encoder'].shape)
+
+            # plt.figure(figsize=(6,6))
+            # sns.heatmap(activation['encoder'][:,same_sample,:].cpu().numpy().transpose(), cmap="magma_r")
+            # plt.figure(figsize=(6,6))
+            # sns.heatmap(activation['pos_encoder'][:,same_sample,:].cpu().numpy().transpose(),  cmap="magma_r")
+            # sns.heatmap((activation['pos_encoder'][-61:-1,same_sample,:]- activation['encoder'][:,same_sample,:]  * math.sqrt(512)).cpu().numpy().transpose(),  cmap="magma_r")
+            #
+            # plt.figure(figsize=(3, 6))
+            # sns.heatmap(activation['encoder'][:, diff_sample, :].cpu().numpy().transpose())
+            # plt.figure(figsize=(15, 6))
+            # sns.heatmap(activation['pos_encoder'][:, diff_sample, :].cpu().numpy().transpose())
+            # plt.show()
+
+    conf = confusion_matrix(test_labels, test_predict)
+    print_results(conf)
 
 
 if __name__ == '__main__':
     # train()
-    pretrain()
+    # pretrain()
     # evaluate()
+    evaluate_pretraining()
