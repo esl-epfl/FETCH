@@ -3,7 +3,7 @@ import scipy.io
 import pandas as pd
 import json
 import pickle
-from utils.BioT import BioTransformer, Epilepsy60Dataset, ImbalancedDataSampler, EvaluateSampler
+from utils.BioT import BioTransformer, Epilepsy60Dataset, ImbalancedDataSampler, EvaluateSampler, PatientDiscriminatorDataset
 import torch
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader, TensorDataset
@@ -12,22 +12,21 @@ from torch.optim import SGD, Adam
 from tqdm import tqdm
 import torch.nn.functional as F
 from sklearn.metrics import confusion_matrix
-from utils.BioT import SEQ_LEN
-
-
-def set_labels(x):
-    for seizure_num in range(len(x['onsets'])):
-        start = max(x['onsets'][seizure_num][0] // 256 - 3, 0)
-        end = x['offsets'][seizure_num][0] // 256 + 4
-        x['labels'][start:end] = 1
+from utils.BioT import SEQ_LEN, SEGMENT
 
 
 def get_data():
+    def set_labels(x):
+        for seizure_num in range(len(x['onsets'])):
+            start = max(x['onsets'][seizure_num][0] // 256 - 3, 0)
+            end = x['offsets'][seizure_num][0] // 256 + 4
+            x['labels'][start:end] = 1
     df = pd.read_csv('../input/Epilepsiae_info/epilepsiae_labels.csv')
     df['labels'] = df['length'].apply(lambda x: np.zeros(x // 256 - 4, dtype=np.int))
     df['onsets'] = df['onsets'].apply(lambda x: json.loads(x.replace('\n', ',')))
     df['offsets'] = df['offsets'].apply(lambda x: json.loads(x.replace('\n', ',')))
     df.apply(set_labels, axis=1)
+    df = df.sort_values(by='patient')
 
     test_set = [x for x in df['file_name'].tolist() if x.startswith('Patient_1_')]
     validation_set = [x for x in df['file_name'].tolist() if x.startswith('Patient_2_')]
@@ -38,16 +37,22 @@ def get_data():
     labels = {'train': np.zeros((0, 1)), 'test': np.zeros((0, 1)), 'val': np.zeros((0, 1))}
     valid_labels = {'train': np.zeros(0), 'test': np.zeros(0), 'val': np.zeros(0)}
     dataset = {'train': training_set, 'test': test_set, 'val': validation_set}
+    pat_start_end = {new_list: [] for new_list in range(30)}
     for mode in ['train', 'test', 'val']:
-        for t_file in dataset[mode][:1]:
+        for t_file in dataset[mode]:
             with open('../input/Epilepsiae_info/{}_zc.pickle'.format(t_file), 'rb') as pickle_file:
                 data = pickle.load(pickle_file)
                 X[mode] = np.concatenate((X[mode], data), axis=0)
+            pat_num = int(t_file.split('_')[1]) - 1
             y = df_file_name.loc[t_file, 'labels']
+
+            valid_start = labels[mode].shape[0] + SEQ_LEN-1
+            valid_end = labels[mode].shape[0] + y.shape[0]
+            valid_labels[mode] = np.concatenate((valid_labels[mode],  np.arange(start= valid_start, stop= valid_end)))
             labels[mode] = np.concatenate((labels[mode], np.expand_dims(y, axis=1)))
-            valid_index = np.arange(start=valid_labels[mode].shape[0] + SEQ_LEN-1,
-                                    stop=valid_labels[mode].shape[0] + y.shape[0])
-            valid_labels[mode] = np.concatenate((valid_labels[mode], valid_index))
+
+            pat_start_end[pat_num].append((valid_start, valid_end))
+
     print(X["train"].shape)
     print(X["val"].shape)
     print(X["test"].shape)
@@ -57,23 +62,24 @@ def get_data():
     X["val"] = (X["val"] - mean_train) / std_train
     X["test"] = (X["test"] - mean_train) / std_train
     print(valid_labels["train"].shape)
-    return X, labels, valid_labels
+    return X, labels, valid_labels, pat_start_end
 
 
 def train():
-    X, labels, valid_labels = get_data()
+    X, labels, valid_labels, _ = get_data()
 
     d_feature = 144
     d_model = 768
     n_heads = 12
     d_hid = 4 * d_model
-    seq_len = SEQ_LEN+1
+    seq_len = SEQ_LEN+2
+    segment = SEGMENT
     n_layers = 12
     n_out = 2
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print('device : ', device)
     model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len, n_layers=n_layers,
-                           n_out=n_out, device=device).to(device)
+                           n_out=n_out, device=device, segments=segment).to(device)
 
     # %%
     seizure_indices = np.where(labels['train'] == 1)[0]
@@ -110,10 +116,11 @@ def train():
         class_samples = {0: 0, 1: 0}
         for i, batch in enumerate(tqdm(train_loader, desc=f"Epoch {epoch + 1}", position=0, leave=True)):
             optimizer.zero_grad()
-            x, y = batch['x'], batch['y']
-            x, y = x.to(device), y.to(device)
-            x = torch.transpose(x, 0, 1)
-            y_hat = model(x)
+            x1, x2, y = batch['x1'], batch['x2'], batch['y']
+            x1, x2, y = x1.to(device), x2.to(device), y.to(device)
+            x1 = torch.transpose(x1, 0, 1)
+            x2 = torch.transpose(x2, 0, 1)
+            y_hat = model(x1, x2)
             loss = criterion(y_hat[-1, :, :], y.view(-1, ))
 
             train_loss += loss.detach().cpu().item()
@@ -148,9 +155,74 @@ def train():
     print("Train_loss_list = ", train_loss_list)
 
 
+def pretrain():
+    X, labels, valid_labels, pat_start_end = get_data()
+    print(pat_start_end)
+
+    d_feature = 144
+    d_model = 512
+    n_heads = 8
+    d_hid = 4 * d_model
+    seq_len = SEQ_LEN + 2
+    segment = SEGMENT
+    n_layers = 8
+    n_out = 2
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print('device : ', device)
+    model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len,
+                           n_layers=n_layers,
+                           n_out=n_out, device=device, segments=segment).to(device)
+
+    X_train = X["train"]
+
+    train_start_end = []
+    for p in range(2,30):
+        train_start_end.append((pat_start_end[p][0][0], pat_start_end[p][-1][-1]))
+    print(train_start_end)
+    train_set = PatientDiscriminatorDataset(torch.from_numpy(X_train).float(), train_start_end)
+    sampler = EvaluateSampler(torch.from_numpy(valid_labels['train']).int())
+    train_loader = DataLoader(train_set, batch_size=16, sampler=sampler, num_workers=4)
+
+    # Training loop
+    optimizer = SGD(model.parameters(), lr=0.01)
+    criterion = CrossEntropyLoss()
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.95)
+    N_EPOCHS = 3
+
+    for epoch in tqdm(range(N_EPOCHS), desc="Training"):
+        model.train(True)  # turn on train mode
+        train_loss = 0.0
+        for i, batch in enumerate(tqdm(train_loader, desc=f"Epoch {epoch + 1}", position=0, leave=True)):
+            optimizer.zero_grad()
+            x1, x2, y = batch['x1'], batch['x2'], batch['y']
+            # print(np.min(np.sum(np.abs((X_train-x1[0,0].numpy())), axis=1)))
+            # x1_index = np.argwhere(np.all(np.abs(X_train-x1[0,0].numpy())<1e-6, axis=1))[0,0]
+            # x2_index = np.argwhere(np.all(np.abs(X_train-x2[0,0].numpy())<1e-6, axis=1))[0,0]
+            # print(x1_index, x2_index, y.numpy()[0])
+            x1, x2, y = x1.to(device), x2.to(device), y.to(device)
+            x1 = torch.transpose(x1, 0, 1)
+            x2 = torch.transpose(x2, 0, 1)
+            y_hat = model(x1, x2)
+            loss = criterion(y_hat[-1, :, :], y.view(-1, ))
+
+            train_loss += loss.detach().cpu().item()
+
+            loss.backward()
+            # torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+            optimizer.step()
+
+        scheduler.step()
+        lr = scheduler.get_last_lr()[0]
+
+        print(f"Epoch {epoch + 1}/{N_EPOCHS} Training loss: {train_loss / len(train_loader):.2f} ")
+
+    torch.save(model, '../output/pre_model{}_n{}'.format(SEQ_LEN, n_layers))
+    torch.save(model.state_dict(), '../output/pre_model{}_state_n{}'.format(SEQ_LEN, n_layers))
+
+
 def evaluate():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    X, labels, valid_labels = get_data()
+    X, labels, valid_labels, _ = get_data()
     X_test = X["test"]
     Y = labels["test"]
 
@@ -193,5 +265,6 @@ def evaluate():
 
 
 if __name__ == '__main__':
-    train()
+    # train()
+    pretrain()
     # evaluate()
