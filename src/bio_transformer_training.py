@@ -15,7 +15,7 @@ from torch.optim import SGD, Adam
 from tqdm import tqdm
 import torch.nn.functional as F
 from sklearn.metrics import confusion_matrix
-from utils.BioT import SEQ_LEN, SEGMENT
+from utils.BioT import SEQ_LEN, SEGMENT, ROI
 
 
 def get_data():
@@ -29,7 +29,7 @@ def get_data():
     df['onsets'] = df['onsets'].apply(lambda x: json.loads(x.replace('\n', ',')))
     df['offsets'] = df['offsets'].apply(lambda x: json.loads(x.replace('\n', ',')))
     df.apply(set_labels, axis=1)
-    df = df.groupby('patient').head(1)
+    # df = df.groupby('patient').head(1)
     df = df.sort_values(by='patient')
 
     test_set = [x for x in df['file_name'].tolist() if x.startswith('Patient_1_')]
@@ -43,8 +43,9 @@ def get_data():
     dataset = {'train': training_set, 'test': test_set, 'val': validation_set}
     pat_start_end = {new_list: [] for new_list in range(30)}
     for mode in ['train', 'test', 'val']:
-        for t_file in dataset[mode][:31]:
+        for t_file in dataset[mode]:
             with open('../input/Epilepsiae_info/{}_zc.pickle'.format(t_file), 'rb') as pickle_file:
+                # print(t_file)
                 data = pickle.load(pickle_file)
                 X[mode] = np.concatenate((X[mode], data), axis=0)
             pat_num = int(t_file.split('_')[1]) - 1
@@ -69,21 +70,8 @@ def get_data():
     return X, labels, valid_labels, pat_start_end
 
 
-def train():
+def train(model, device, save_path:str):
     X, labels, valid_labels, _ = get_data()
-
-    d_feature = 144
-    d_model = 768
-    n_heads = 12
-    d_hid = 4 * d_model
-    seq_len = SEQ_LEN+2
-    segment = SEGMENT
-    n_layers = 12
-    n_out = 2
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print('device : ', device)
-    model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len, n_layers=n_layers,
-                           n_out=n_out, device=device, segments=segment).to(device)
 
     # %%
     seizure_indices = np.where(labels['train'] == 1)[0]
@@ -110,7 +98,7 @@ def train():
     optimizer = SGD(model.parameters(), lr=0.01)
     criterion = CrossEntropyLoss()
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.95)
-    N_EPOCHS = 20
+    N_EPOCHS = 10
     train_loss_list = []
     val_loss_list = []
 
@@ -120,7 +108,8 @@ def train():
         class_samples = {0: 0, 1: 0}
         for i, batch in enumerate(tqdm(train_loader, desc=f"Epoch {epoch + 1}", position=0, leave=True)):
             optimizer.zero_grad()
-            x1, x2, y = batch['x1'], batch['x2'], batch['y']
+            x, y = batch['x'], batch['y']
+            x1, x2 = x[:,:SEGMENT, :], x[:, SEGMENT:,:]
             x1, x2, y = x1.to(device), x2.to(device), y.to(device)
             x1 = torch.transpose(x1, 0, 1)
             x2 = torch.transpose(x2, 0, 1)
@@ -135,12 +124,14 @@ def train():
 
         with torch.no_grad():
             running_vloss = 0.0
-            for i, vdata in enumerate(val_loader):
-                vinputs, vlabels = vdata['x'], vdata['y']
-                vinputs, vlabels = vinputs.to(device), vlabels.to(device)
-                vinputs = torch.transpose(vinputs, 0, 1)
-                voutputs = model(vinputs)
-                vloss = criterion(voutputs[-1, :, :], vlabels.view(-1, ))
+            for i, batch in enumerate(val_loader):
+                x, y = batch['x'], batch['y']
+                x1, x2 = x[:, :SEGMENT, :], x[:, SEGMENT:, :]
+                x1, x2, y = x1.to(device), x2.to(device), y.to(device)
+                x1 = torch.transpose(x1, 0, 1)
+                x2 = torch.transpose(x2, 0, 1)
+                voutputs = model(x1, x2)
+                vloss = criterion(voutputs[-1, :, :], y.view(-1, ))
                 running_vloss += vloss.detach().cpu().item()
 
             avg_vloss = running_vloss/ len(val_loader)
@@ -153,8 +144,7 @@ def train():
             print(f"Epoch {epoch + 1}/{N_EPOCHS} Training loss: {train_loss/len(train_loader):.2f} ")
             train_loss_list.append(train_loss/len(train_loader))
 
-    torch.save(model, '../output/model{}_n{}'.format(SEQ_LEN, n_layers))
-    torch.save(model.state_dict(), '../output/model{}_state_n{}'.format(SEQ_LEN, n_layers))
+    torch.save(model, save_path)
     print("Validation_loss_list = ", val_loss_list)
     print("Train_loss_list = ", train_loss_list)
 
@@ -224,6 +214,31 @@ def pretrain():
     torch.save(model.state_dict(), '../output/pre_model{}_state_n{}'.format(SEQ_LEN, n_layers))
 
 
+def train_scratch():
+    d_feature = 144
+    d_model = 768
+    n_heads = 12
+    d_hid = 4 * d_model
+    seq_len = SEQ_LEN+2
+    segment = SEGMENT
+    n_layers = 12
+    n_out = 2
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print('device : ', device)
+    model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len, n_layers=n_layers,
+                           n_out=n_out, device=device, segments=segment).to(device)
+    savepath = '../output/model{}_n{}'.format(SEQ_LEN, n_layers)
+    train(model, device, savepath)
+
+
+def finetune():
+    model = torch.load('../output/pre_model{}_n8'.format(SEQ_LEN))
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print('device : ', device)
+    savepath = '../output/finetuned_model{}_n8'.format(SEQ_LEN)
+    train(model,device, savepath)
+
+
 def print_results(conf):
     print("Confusion: ", conf)
     conf_normal = conf / np.expand_dims(conf.astype(np.float).sum(axis=1), 1)
@@ -242,26 +257,26 @@ def evaluate():
     test_sampler = EvaluateSampler(torch.from_numpy(valid_labels['test']).int())
     test_loader = DataLoader(test_set, batch_size=16, shuffle=False, sampler=test_sampler)
 
-    model = torch.load('../output/model{}_n12'.format(SEQ_LEN))
+    model = torch.load('../output/finetuned_model{}_n8'.format(SEQ_LEN))
     model.eval()
     test_predict = []
     test_labels = []
 
     # since we're not training, we don't need to calculate the gradients for our outputs
     with torch.no_grad():
-        for data in test_loader:
-            images, labels = data['x'].to(device), data['y'].to(device)
-            # print('data shape: {}'.format(images.shape))
-            # print('label shape: {}'.format(labels.shape))
-            # calculate outputs by running images through the network
-            images = torch.transpose(images, 0, 1)
-            outputs = model(images)[-1,:,:]
+        for batch in test_loader:
+            x, y = batch['x'], batch['y']
+            x1, x2 = x[:, :SEGMENT, :], x[:, SEGMENT:, :]
+            x1, x2, y = x1.to(device), x2.to(device), y.to(device)
+            x1 = torch.transpose(x1, 0, 1)
+            x2 = torch.transpose(x2, 0, 1)
+            outputs = model(x1, x2)[-1,:,:]
             # print('output shape: {}'.format(outputs.shape))
             # the class with the highest energy is what we choose as prediction
             _, predicted = torch.max(outputs.data, 1)
             # print('predicted: {}'.format(predicted))
             test_predict += predicted.tolist()
-            test_labels += labels.view(-1,).tolist()
+            test_labels += y.view(-1,).tolist()
             # print('labels: {}'.format(labels.view(-1,)))
             # correct += (predicted == labels.view(-1,)).sum().item()
             # print('(predicted == labels): {}'.format((predicted == labels.view(-1,))))
@@ -273,15 +288,16 @@ def evaluate():
 
 
 def evaluate_pretraining():
-    activation = {}
-
-    def get_activation(name):
-        def hook(model, input, output):
-            activation[name] = output.detach()
-
-        return hook
+    # activation = {}
+    #
+    # def get_activation(name):
+    #     def hook(model, input, output):
+    #         activation[name] = output.detach()
+    #
+    #     return hook
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print('device: ',device)
     X, labels, valid_labels, pat_start_end = get_data()
     X_train = X["train"]
 
@@ -295,17 +311,19 @@ def evaluate_pretraining():
 
     model = torch.load('../output/pre_model{}_n8'.format(SEQ_LEN))
     print(model)
-    model.encoder.register_forward_hook(get_activation('encoder'))
-    model.pos_encoder.register_forward_hook(get_activation('pos_encoder'))
+    # model.encoder.register_forward_hook(get_activation('encoder'))
+    # model.pos_encoder.register_forward_hook(get_activation('pos_encoder'))
 
     model.eval()
     test_predict = []
     test_labels = []
-
+    # randperm_seg = torch.randperm(SEGMENT)
+    # randperm_roi = torch.randperm(ROI)
     # since we're not training, we don't need to calculate the gradients for our outputs
     with torch.no_grad():
         for batch in tqdm(test_loader, position=0, leave=True):
             x1, x2, y = batch['x1'], batch['x2'], batch['y']
+            # x1, x2 = x1[:, randperm_seg, :], x2[:, randperm_roi, :]
             x1, x2, y = x1.to(device), x2.to(device), y.to(device)
             x1 = torch.transpose(x1, 0, 1)
             x2 = torch.transpose(x2, 0, 1)
@@ -339,5 +357,6 @@ def evaluate_pretraining():
 if __name__ == '__main__':
     # train()
     # pretrain()
-    # evaluate()
-    evaluate_pretraining()
+    evaluate()
+    # evaluate_pretraining()
+    # finetune()

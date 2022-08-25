@@ -45,8 +45,8 @@ class BioTransformer(nn.Module):
 
     def forward(self, features_prior, features_later):
         c, n, h = features_prior.shape
-        src_prior = self.encoder(features_prior)  # * math.sqrt(self.d_model)
-        src_later = self.encoder(features_later)  # * math.sqrt(self.d_model)
+        src_prior = self.encoder(features_prior) * math.sqrt(self.d_model)
+        src_later = self.encoder(features_later) * math.sqrt(self.d_model)
         tokens = torch.cat((src_prior, self.sep_token.repeat(1, n, 1), src_later, self.class_token.repeat(1, n, 1)),
                            dim=0)
         tokens = self.pos_encoder(tokens)
