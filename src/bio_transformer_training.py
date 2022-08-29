@@ -29,7 +29,7 @@ def get_data():
     df['onsets'] = df['onsets'].apply(lambda x: json.loads(x.replace('\n', ',')))
     df['offsets'] = df['offsets'].apply(lambda x: json.loads(x.replace('\n', ',')))
     df.apply(set_labels, axis=1)
-    # df = df.groupby('patient').head(1)
+    df = df.groupby('patient').head(1)
     df = df.sort_values(by='patient')
 
     test_set = [x for x in df['file_name'].tolist() if x.startswith('Patient_1_')]
@@ -154,12 +154,12 @@ def pretrain():
     print(pat_start_end)
 
     d_feature = 144
-    d_model = 512
-    n_heads = 8
+    d_model = 768
+    n_heads = 12
     d_hid = 4 * d_model
     seq_len = SEQ_LEN + 2
     segment = SEGMENT
-    n_layers = 8
+    n_layers = 12
     n_out = 2
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print('device : ', device)
@@ -181,7 +181,7 @@ def pretrain():
     optimizer = SGD(model.parameters(), lr=0.01)
     criterion = CrossEntropyLoss()
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.95)
-    N_EPOCHS = 3
+    N_EPOCHS = 4
 
     for epoch in tqdm(range(N_EPOCHS), desc="Training"):
         model.train(True)  # turn on train mode
@@ -211,7 +211,7 @@ def pretrain():
         print(f"Epoch {epoch + 1}/{N_EPOCHS} Training loss: {train_loss / len(train_loader):.2f} ")
 
     torch.save(model, '../output/pre_model{}_n{}'.format(SEQ_LEN, n_layers))
-    torch.save(model.state_dict(), '../output/pre_model{}_state_n{}'.format(SEQ_LEN, n_layers))
+    # torch.save(model.state_dict(), '../output/pre_model{}_state_n{}'.format(SEQ_LEN, n_layers))
 
 
 def train_scratch():
@@ -309,7 +309,7 @@ def evaluate_pretraining():
     test_sampler = EvaluateSampler(torch.from_numpy(valid_labels['train']).int())
     test_loader = DataLoader(test_set, batch_size=16, shuffle=False, sampler=test_sampler)
 
-    model = torch.load('../output/pre_model{}_n8'.format(SEQ_LEN))
+    model = torch.load('../output/pre_model{}_n12'.format(SEQ_LEN))
     print(model)
     # model.encoder.register_forward_hook(get_activation('encoder'))
     # model.pos_encoder.register_forward_hook(get_activation('pos_encoder'))
@@ -317,13 +317,13 @@ def evaluate_pretraining():
     model.eval()
     test_predict = []
     test_labels = []
-    # randperm_seg = torch.randperm(SEGMENT)
-    # randperm_roi = torch.randperm(ROI)
+    randperm_seg = torch.randperm(SEGMENT)
+    randperm_roi = torch.randperm(ROI)
     # since we're not training, we don't need to calculate the gradients for our outputs
     with torch.no_grad():
         for batch in tqdm(test_loader, position=0, leave=True):
             x1, x2, y = batch['x1'], batch['x2'], batch['y']
-            # x1, x2 = x1[:, randperm_seg, :], x2[:, randperm_roi, :]
+            x1, x2 = x1[:, randperm_seg, :], x2[:, randperm_roi, :]
             x1, x2, y = x1.to(device), x2.to(device), y.to(device)
             x1 = torch.transpose(x1, 0, 1)
             x2 = torch.transpose(x2, 0, 1)
@@ -335,20 +335,21 @@ def evaluate_pretraining():
 
             # same_sample = np.where(y.cpu().numpy() == 0)[0][0]
             # diff_sample = np.where(y.cpu().numpy() == 1)[0][0]
-
+            #
             # print(activation['pos_encoder'].shape)
-
+            #
             # plt.figure(figsize=(6,6))
             # sns.heatmap(activation['encoder'][:,same_sample,:].cpu().numpy().transpose(), cmap="magma_r")
             # plt.figure(figsize=(6,6))
             # sns.heatmap(activation['pos_encoder'][:,same_sample,:].cpu().numpy().transpose(),  cmap="magma_r")
-            # sns.heatmap((activation['pos_encoder'][-61:-1,same_sample,:]- activation['encoder'][:,same_sample,:]  * math.sqrt(512)).cpu().numpy().transpose(),  cmap="magma_r")
+            # # sns.heatmap((activation['pos_encoder'][-61:-1,same_sample,:]- activation['encoder'][:,same_sample,:]  * math.sqrt(512)).cpu().numpy().transpose(),  cmap="magma_r")
             #
             # plt.figure(figsize=(3, 6))
             # sns.heatmap(activation['encoder'][:, diff_sample, :].cpu().numpy().transpose())
             # plt.figure(figsize=(15, 6))
             # sns.heatmap(activation['pos_encoder'][:, diff_sample, :].cpu().numpy().transpose())
             # plt.show()
+            # return
 
     conf = confusion_matrix(test_labels, test_predict)
     print_results(conf)
@@ -357,6 +358,6 @@ def evaluate_pretraining():
 if __name__ == '__main__':
     # train()
     # pretrain()
-    evaluate()
-    # evaluate_pretraining()
+    # evaluate()
+    evaluate_pretraining()
     # finetune()
