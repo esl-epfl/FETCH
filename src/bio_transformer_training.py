@@ -1,12 +1,12 @@
 import math
 
 import numpy as np
-import scipy.io
 import pandas as pd
 import json
 import pickle
 import seaborn as sns
-from utils.BioT import BioTransformer, Epilepsy60Dataset, ImbalancedDataSampler, EvaluateSampler, PatientDiscriminatorDataset
+from utils.BioT import BioTransformer, Epilepsy60Dataset, ImbalancedDataSampler, EvaluateSampler,\
+    PatientDiscriminatorDataset, PatientDiscriminatorEvaluationDataset
 import torch
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader, TensorDataset
@@ -35,7 +35,7 @@ def get_data(mode='train'):
     test_set = [x for x in df['file_name'].tolist() if x.startswith('Patient_1_')]
     if mode == "train":
         validation_set = [x for x in df['file_name'].tolist() if x.startswith('Patient_2_')]
-    else:
+    else:  # pretrain mode
         validation_set = [x for x in (df.groupby('patient').head(1))['file_name'].tolist() if
                           (x.startswith('Patient_2_') or x.startswith('Patient_3_'))]
     training_set = [x for x in df['file_name'].tolist() if (not x in test_set) and (not x in validation_set)]
@@ -43,9 +43,11 @@ def get_data(mode='train'):
 
     X = {'train': np.zeros((0, 144)), 'test': np.zeros((0, 144)), 'val': np.zeros((0, 144))}
     labels = {'train': np.zeros((0, 1)), 'test': np.zeros((0, 1)), 'val': np.zeros((0, 1))}
-    valid_labels = {'train': np.zeros(0), 'test': np.zeros(0), 'val': np.zeros(0)}
+    valid_labels = {'train': np.zeros(0, dtype=np.int), 'test': np.zeros(0, dtype=np.int), 'val': np.zeros(0, dtype=np.int)}
     dataset = {'train': training_set, 'test': test_set, 'val': validation_set}
-    pat_start_end = {new_list: [] for new_list in range(30)}
+    pat_start_end = {'train': {new_list: [] for new_list in range(30)},
+                     'test': {new_list: [] for new_list in range(30)},
+                     'val': {new_list: [] for new_list in range(30)}}
     for mode in ['train', 'test', 'val']:
         for t_file in dataset[mode]:
             with open('../input/Epilepsiae_info/{}_zc.pickle'.format(t_file), 'rb') as pickle_file:
@@ -60,7 +62,7 @@ def get_data(mode='train'):
             valid_labels[mode] = np.concatenate((valid_labels[mode],  np.arange(start= valid_start, stop= valid_end)))
             labels[mode] = np.concatenate((labels[mode], np.expand_dims(y, axis=1)))
 
-            pat_start_end[pat_num].append((valid_start, valid_end))
+            pat_start_end[mode][pat_num].append((valid_start, valid_end))
 
     print(X["train"].shape)
     print(X["val"].shape)
@@ -154,9 +156,8 @@ def train(model, device, save_path:str, learning_rate:float = 0.01):
 
 
 def pretrain():
-    X, labels, valid_labels, pat_start_end = get_data()
-    print(pat_start_end)
-
+    X, labels, valid_labels, pat_file_start_end = get_data(mode='pretrain')
+    print(pat_file_start_end)
     d_feature = 144
     d_model = 768
     n_heads = 12
@@ -173,11 +174,19 @@ def pretrain():
 
     X_train = X["train"]
 
-    train_start_end = []
-    for p in range(2,30):
-        train_start_end.append((pat_start_end[p][0][0], pat_start_end[p][-1][-1]))
-    print(train_start_end)
-    train_set = PatientDiscriminatorDataset(torch.from_numpy(X_train).float(), train_start_end)
+    pat_start_end = {"train": [], "val": []}
+    for mode in ["train", "val"]:
+        for p in range(30):
+            if len(pat_file_start_end[mode][p]) == 0:
+                continue
+            pat_start_end[mode].append((pat_file_start_end[mode][p][0][0], pat_file_start_end[mode][p][-1][-1]))
+    print(pat_start_end)
+
+    validation_set = PatientDiscriminatorEvaluationDataset(torch.from_numpy(X["val"]).float(), pat_start_end['val'],
+                                                           torch.from_numpy(valid_labels['val']).int())
+    validation_loader = DataLoader(validation_set, batch_size=16, num_workers=4)
+
+    train_set = PatientDiscriminatorDataset(torch.from_numpy(X_train).float(), pat_start_end['train'])
     sampler = EvaluateSampler(torch.from_numpy(valid_labels['train']).int(), overlap=10)
     train_loader = DataLoader(train_set, batch_size=16, sampler=sampler, num_workers=4)
 
@@ -185,7 +194,7 @@ def pretrain():
     optimizer = SGD(model.parameters(), lr=0.01)
     criterion = CrossEntropyLoss()
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.95)
-    N_EPOCHS = 40
+    N_EPOCHS = 30
 
     for epoch in tqdm(range(N_EPOCHS), desc="Training"):
         model.train(True)  # turn on train mode
@@ -209,6 +218,20 @@ def pretrain():
             # torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
             optimizer.step()
 
+        model.eval()
+        with torch.no_grad():
+            running_vloss = 0.0
+            for i, batch in enumerate(validation_loader):
+                x1, x2, y = batch['x1'], batch['x2'], batch['y']
+                x1, x2, y = x1.to(device), x2.to(device), y.to(device)
+                x1 = torch.transpose(x1, 0, 1)
+                x2 = torch.transpose(x2, 0, 1)
+                voutputs = model(x1, x2)
+                vloss = criterion(voutputs[-1, :, :], y.view(-1, ))
+                running_vloss += vloss.detach().cpu().item()
+
+            avg_vloss = running_vloss / len(validation_loader)
+            print('LOSS valid {}'.format(avg_vloss))
         scheduler.step()
         lr = scheduler.get_last_lr()[0]
 
@@ -375,7 +398,7 @@ def evaluate_pretraining():
 
 if __name__ == '__main__':
     # train()
-    # pretrain()
+    pretrain()
     # evaluate()
     # evaluate_pretraining()
-    finetune()
+    # finetune()

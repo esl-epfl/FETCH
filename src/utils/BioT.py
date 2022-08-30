@@ -165,3 +165,25 @@ class PatientDiscriminatorDataset(Dataset):
         x_prior = self.x_total[idx_sample - SEGMENT:idx_sample, :]
         sample = {'x1': x_prior, 'x2': x_later, 'y': label}
         return sample
+
+
+class PatientDiscriminatorEvaluationDataset(Dataset):
+    def __init__(self, x_total, pat_start_end, valid_indices):
+        self.x_total = x_total
+        self.pat_start_end = pat_start_end
+        self.pat_start = [x[0] for x in pat_start_end]
+        self.valid_minutes_indices = valid_indices[::60]
+
+    def __len__(self):
+        return self.valid_minutes_indices.shape[0] ** 2
+
+    def __getitem__(self, idx):
+        idx_later = self.valid_minutes_indices[idx // self.valid_minutes_indices.shape[0]]
+        idx_prior = self.valid_minutes_indices[idx % self.valid_minutes_indices.shape[0]]
+        x_later = self.x_total[idx_later - ROI:idx_later, :]
+        x_prior = self.x_total[idx_prior - SEGMENT:idx_prior, :]
+        pat_num_later = bisect(self.pat_start, idx_later) - 1
+        pat_num_prior = bisect(self.pat_start, idx_prior) - 1
+        label = 0 if pat_num_prior==pat_num_later else 1
+        sample = {'x1': x_prior, 'x2': x_later, 'y': label}
+        return sample
