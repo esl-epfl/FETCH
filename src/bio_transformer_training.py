@@ -18,7 +18,7 @@ from sklearn.metrics import confusion_matrix
 from utils.BioT import SEQ_LEN, SEGMENT, ROI
 
 
-def get_data():
+def get_data(mode='train'):
     def set_labels(x):
         for seizure_num in range(len(x['onsets'])):
             start = max(x['onsets'][seizure_num][0] // 256 - 3, 0)
@@ -29,11 +29,15 @@ def get_data():
     df['onsets'] = df['onsets'].apply(lambda x: json.loads(x.replace('\n', ',')))
     df['offsets'] = df['offsets'].apply(lambda x: json.loads(x.replace('\n', ',')))
     df.apply(set_labels, axis=1)
-    df = df.groupby('patient').head(1)
+    # df = df.groupby('patient').head(1)
     df = df.sort_values(by='patient')
 
     test_set = [x for x in df['file_name'].tolist() if x.startswith('Patient_1_')]
-    validation_set = [x for x in df['file_name'].tolist() if x.startswith('Patient_2_')]
+    if mode == "train":
+        validation_set = [x for x in df['file_name'].tolist() if x.startswith('Patient_2_')]
+    else:
+        validation_set = [x for x in (df.groupby('patient').head(1))['file_name'].tolist() if
+                          (x.startswith('Patient_2_') or x.startswith('Patient_3_'))]
     training_set = [x for x in df['file_name'].tolist() if (not x in test_set) and (not x in validation_set)]
     df_file_name = df.set_index('file_name')
 
@@ -70,7 +74,7 @@ def get_data():
     return X, labels, valid_labels, pat_start_end
 
 
-def train(model, device, save_path:str):
+def train(model, device, save_path:str, learning_rate:float = 0.01):
     X, labels, valid_labels, _ = get_data()
 
     # %%
@@ -95,10 +99,10 @@ def train(model, device, save_path:str):
     val_loader = DataLoader(val_set, shuffle=False, sampler=val_sampler, batch_size=16)
 
     # Training loop
-    optimizer = SGD(model.parameters(), lr=0.01)
+    optimizer = SGD(model.parameters(), lr=learning_rate)
     criterion = CrossEntropyLoss()
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.95)
-    N_EPOCHS = 10
+    N_EPOCHS = 20
     train_loss_list = []
     val_loss_list = []
 
@@ -121,7 +125,7 @@ def train(model, device, save_path:str):
             loss.backward()
             # torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
             optimizer.step()
-
+        model.eval()
         with torch.no_grad():
             running_vloss = 0.0
             for i, batch in enumerate(val_loader):
@@ -174,14 +178,14 @@ def pretrain():
         train_start_end.append((pat_start_end[p][0][0], pat_start_end[p][-1][-1]))
     print(train_start_end)
     train_set = PatientDiscriminatorDataset(torch.from_numpy(X_train).float(), train_start_end)
-    sampler = EvaluateSampler(torch.from_numpy(valid_labels['train']).int())
+    sampler = EvaluateSampler(torch.from_numpy(valid_labels['train']).int(), overlap=10)
     train_loader = DataLoader(train_set, batch_size=16, sampler=sampler, num_workers=4)
 
     # Training loop
     optimizer = SGD(model.parameters(), lr=0.01)
     criterion = CrossEntropyLoss()
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.95)
-    N_EPOCHS = 4
+    N_EPOCHS = 40
 
     for epoch in tqdm(range(N_EPOCHS), desc="Training"):
         model.train(True)  # turn on train mode
@@ -232,11 +236,25 @@ def train_scratch():
 
 
 def finetune():
-    model = torch.load('../output/pre_model{}_n8'.format(SEQ_LEN))
+    model = torch.load('../output/finetuned_model{}_n12'.format(SEQ_LEN))
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print('device : ', device)
-    savepath = '../output/finetuned_model{}_n8'.format(SEQ_LEN)
-    train(model,device, savepath)
+    savepath = '../output/finetuned_model{}_n12'.format(SEQ_LEN)
+    model.decoder.weight.data.uniform_(-0.1, 0.1)
+    model.decoder.bias.data.uniform_(-0.1, 0.1)
+    model.encoder.weight.requires_grad = False
+    model.encoder.bias.requires_grad = False
+    model.sep_token.requires_grad = False
+    model.class_token.requires_grad = False
+    for layer_num in range(10):
+        for param in model.transformer_encoder.layers[layer_num].parameters():
+            param.requires_grad = False
+
+    # for name, param in model.named_parameters():
+    #     if param.requires_grad:
+    #         print(
+    #         name, param.data.shape)
+    train(model,device, savepath, learning_rate=0.001)
 
 
 def print_results(conf):
@@ -359,5 +377,5 @@ if __name__ == '__main__':
     # train()
     # pretrain()
     # evaluate()
-    evaluate_pretraining()
-    # finetune()
+    # evaluate_pretraining()
+    finetune()

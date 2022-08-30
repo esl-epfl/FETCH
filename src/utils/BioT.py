@@ -127,15 +127,16 @@ class ImbalancedDataSampler(Sampler):
 
 
 class EvaluateSampler(Sampler):
-    def __init__(self, valid_indices):
+    def __init__(self, valid_indices, overlap:int =1):
         super().__init__(valid_indices)
-        self.valid_indices = valid_indices
+        valid_indices_sampled = valid_indices[::overlap]
+        self.valid_indices_perm = valid_indices_sampled[torch.randperm(len(valid_indices)//overlap)]
 
     def __iter__(self):
-        return iter(self.valid_indices[torch.randperm(len(self.valid_indices))])
+        return iter(self.valid_indices_perm)
 
     def __len__(self):
-        return len(self.valid_indices)
+        return len(self.valid_indices_perm)
 
 
 class PatientDiscriminatorDataset(Dataset):
