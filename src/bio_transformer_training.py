@@ -143,6 +143,8 @@ def train(model, device, save_path:str, learning_rate:float = 0.01):
             avg_vloss = running_vloss/ len(val_loader)
             print('LOSS valid {}'.format(avg_vloss))
             val_loss_list.append(avg_vloss)
+            if avg_vloss < np.min(np.array(val_loss_list)):
+                torch.save(model, "{}_best".format(save_path))
 
             scheduler.step()
             lr = scheduler.get_last_lr()[0]
@@ -263,17 +265,17 @@ def train_scratch():
 
 
 def finetune():
-    model = torch.load('../output/pre_model{}_n12'.format(SEQ_LEN))
+    model = torch.load('../output/pre_model{}_n12_31Aug'.format(SEQ_LEN))
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print('device : ', device)
-    savepath = '../output/finetuned_model{}_n12_frozen12'.format(SEQ_LEN)
+    savepath = '../output/finetuned_model{}_n12_frozen10'.format(SEQ_LEN)
     model.decoder.weight.data.uniform_(-0.1, 0.1)
     model.decoder.bias.data.uniform_(-0.1, 0.1)
     model.encoder.weight.requires_grad = False
     model.encoder.bias.requires_grad = False
     model.sep_token.requires_grad = False
     model.class_token.requires_grad = False
-    for layer_num in range(12):
+    for layer_num in range(10):
         for param in model.transformer_encoder.layers[layer_num].parameters():
             param.requires_grad = False
 
