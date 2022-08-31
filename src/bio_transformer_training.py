@@ -155,6 +155,16 @@ def train(model, device, save_path:str, learning_rate:float = 0.01):
     print("Train_loss_list = ", train_loss_list)
 
 
+def get_pat_start_end(pat_file_start_end):
+    pat_start_end = {"train": [], "val": []}
+    for mode in ["train", "val"]:
+        for p in range(30):
+            if len(pat_file_start_end[mode][p]) == 0:
+                continue
+            pat_start_end[mode].append((pat_file_start_end[mode][p][0][0], pat_file_start_end[mode][p][-1][-1]))
+    return pat_start_end
+
+
 def pretrain():
     X, labels, valid_labels, pat_file_start_end = get_data(mode='pretrain')
     print(pat_file_start_end)
@@ -174,13 +184,7 @@ def pretrain():
 
     X_train = X["train"]
 
-    pat_start_end = {"train": [], "val": []}
-    for mode in ["train", "val"]:
-        for p in range(30):
-            if len(pat_file_start_end[mode][p]) == 0:
-                continue
-            pat_start_end[mode].append((pat_file_start_end[mode][p][0][0], pat_file_start_end[mode][p][-1][-1]))
-    print(pat_start_end)
+    pat_start_end = get_pat_start_end(pat_file_start_end)
 
     validation_set = PatientDiscriminatorEvaluationDataset(torch.from_numpy(X["val"]).float(), pat_start_end['val'],
                                                            torch.from_numpy(valid_labels['val']).int())
@@ -259,24 +263,24 @@ def train_scratch():
 
 
 def finetune():
-    model = torch.load('../output/finetuned_model{}_n12'.format(SEQ_LEN))
+    model = torch.load('../output/pre_model{}_n12'.format(SEQ_LEN))
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print('device : ', device)
-    savepath = '../output/finetuned_model{}_n12'.format(SEQ_LEN)
+    savepath = '../output/finetuned_model{}_n12_frozen12'.format(SEQ_LEN)
     model.decoder.weight.data.uniform_(-0.1, 0.1)
     model.decoder.bias.data.uniform_(-0.1, 0.1)
     model.encoder.weight.requires_grad = False
     model.encoder.bias.requires_grad = False
     model.sep_token.requires_grad = False
     model.class_token.requires_grad = False
-    for layer_num in range(10):
+    for layer_num in range(12):
         for param in model.transformer_encoder.layers[layer_num].parameters():
             param.requires_grad = False
 
-    # for name, param in model.named_parameters():
-    #     if param.requires_grad:
-    #         print(
-    #         name, param.data.shape)
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            print(
+            name, param.data.shape)
     train(model,device, savepath, learning_rate=0.001)
 
 
@@ -298,7 +302,7 @@ def evaluate():
     test_sampler = EvaluateSampler(torch.from_numpy(valid_labels['test']).int())
     test_loader = DataLoader(test_set, batch_size=16, shuffle=False, sampler=test_sampler)
 
-    model = torch.load('../output/finetuned_model{}_n8'.format(SEQ_LEN))
+    model = torch.load('../output/model{}_n12'.format(SEQ_LEN))
     model.eval()
     test_predict = []
     test_labels = []
@@ -339,18 +343,16 @@ def evaluate_pretraining():
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print('device: ',device)
-    X, labels, valid_labels, pat_start_end = get_data()
-    X_train = X["train"]
+    X, labels, valid_labels, pat_file_start_end = get_data(mode='pretrain')
+    X_train = X["val"]
 
-    train_start_end = []
-    for p in range(2, 30):
-        train_start_end.append((pat_start_end[p][0][0], pat_start_end[p][-1][-1]))
+    pat_start_end = get_pat_start_end(pat_file_start_end)
 
-    test_set = PatientDiscriminatorDataset(torch.from_numpy(X_train).float(), train_start_end)
-    test_sampler = EvaluateSampler(torch.from_numpy(valid_labels['train']).int())
-    test_loader = DataLoader(test_set, batch_size=16, shuffle=False, sampler=test_sampler)
+    validation_set = PatientDiscriminatorEvaluationDataset(torch.from_numpy(X["val"]).float(), pat_start_end['val'],
+                                                           torch.from_numpy(valid_labels['val']).int())
+    validation_loader = DataLoader(validation_set, batch_size=16, num_workers=4)
 
-    model = torch.load('../output/pre_model{}_n12'.format(SEQ_LEN))
+    model = torch.load('../output/pre_model{}_n12_31Aug'.format(SEQ_LEN))
     print(model)
     # model.encoder.register_forward_hook(get_activation('encoder'))
     # model.pos_encoder.register_forward_hook(get_activation('pos_encoder'))
@@ -362,7 +364,7 @@ def evaluate_pretraining():
     randperm_roi = torch.randperm(ROI)
     # since we're not training, we don't need to calculate the gradients for our outputs
     with torch.no_grad():
-        for batch in tqdm(test_loader, position=0, leave=True):
+        for batch in tqdm(validation_loader, position=0, leave=True):
             x1, x2, y = batch['x1'], batch['x2'], batch['y']
             x1, x2 = x1[:, randperm_seg, :], x2[:, randperm_roi, :]
             x1, x2, y = x1.to(device), x2.to(device), y.to(device)
@@ -398,7 +400,8 @@ def evaluate_pretraining():
 
 if __name__ == '__main__':
     # train()
-    pretrain()
+    # pretrain()
     # evaluate()
-    # evaluate_pretraining()
+    # train_scratch()
+    evaluate_pretraining()
     # finetune()
