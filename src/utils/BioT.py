@@ -25,15 +25,20 @@ class BioTransformer(nn.Module):
         self.device = device
         self.seq_len = seq_len
 
+        self.pe = nn.Parameter(torch.randn(seq_len, 1, d_model))
+        se_roi = nn.Parameter(torch.randn(1, 1, d_model)).repeat(seq_len - segments,1, 1)
+        se_seg = nn.Parameter(torch.randn(1, 1, d_model)).repeat(segments, 1, 1)
+        self.se = torch.cat((se_roi, se_seg), dim=0).to(device)
+
         encoder_layers = TransformerEncoderLayer(d_model, n_heads, d_hid)
         self.transformer_encoder = TransformerEncoder(encoder_layers, n_layers)
         self.encoder = nn.Linear(d_feature, d_model)
-        self.pos_encoder = PositionalEncoding(d_model, dropout=0.1, max_len=seq_len, segment_length=segments)
+        self.pos_encoder = PositionalEncoding(self.pe, self.se, d_model, dropout=0.1, max_len=seq_len, segment_length=segments)
         self.decoder = nn.Linear(d_model, n_out)
         self.sigmoid = nn.Sigmoid()
 
-        self.class_token = nn.Parameter(torch.rand(1, d_model))
-        self.sep_token = nn.Parameter(torch.rand(1, d_model))
+        self.cls_token = nn.Parameter(torch.rand(1, 1, d_model))
+        self.sep_token = nn.Parameter(torch.rand(1, 1, d_model))
 
         self.init_weights()
 
@@ -47,7 +52,7 @@ class BioTransformer(nn.Module):
         c, n, h = features_prior.shape
         src_prior = self.encoder(features_prior) #* math.sqrt(self.d_model)
         src_later = self.encoder(features_later) #* math.sqrt(self.d_model)
-        tokens = torch.cat((src_prior, self.sep_token.repeat(1, n, 1), src_later, self.class_token.repeat(1, n, 1)),
+        tokens = torch.cat((src_prior, self.sep_token.expand(-1, n, -1), src_later, self.cls_token.expand(-1, n, -1)),
                            dim=0)
         tokens = self.pos_encoder(tokens)
         output = self.transformer_encoder(tokens)
@@ -58,29 +63,30 @@ class BioTransformer(nn.Module):
 
 class PositionalEncoding(nn.Module):
 
-    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000, segment_length: int = 0):
+    def __init__(self, pe, se, d_model: int, dropout: float = 0.1, max_len: int = 5000, segment_length: int = 0):
         super().__init__()
         self.dropout = nn.Dropout(p=dropout)
 
-        position = torch.arange(max_len).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
-        pe = torch.zeros(max_len, 1, d_model)
-        pe[:, 0, 0::2] = torch.sin(position * div_term)
-        pe[:, 0, 1::2] = torch.cos(position * div_term)
-
-        se = torch.zeros_like(pe)  # segment encoding
-        se[:segment_length, 0, :] = -1
-        se[segment_length:, 0, :] = 1
-        self.register_buffer('pe', pe)
-        self.register_buffer('se', se)
+        # position = torch.arange(max_len).unsqueeze(1)
+        # div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+        # pe = torch.zeros(max_len, 1, d_model)
+        # pe[:, 0, 0::2] = torch.sin(position * div_term)
+        # pe[:, 0, 1::2] = torch.cos(position * div_term)
+        self.pe = pe
+        self.se = se
+        # self.se = torch.zeros_like(pe)  # segment encoding
+        # self.se[:segment_length, :, :] = self.se_seg.expand(segment_length, -1, -1)
+        # self.se[segment_length:, :, :] = self.se_roi.expand(max_len-segment_length, -1, -1)
+        # self.se = torch.cat((self.se_seg.expand(segment_length, -1, -1),
+        #                      self.se_roi.expand(max_len-segment_length, -1, -1)))
 
     def forward(self, x: Tensor) -> Tensor:
         """
         Args:
             x: Tensor, shape [seq_len, batch_size, embedding_dim]
         """
-        x = x + self.pe[:x.size(0)]
-        x = x + self.se[:x.size(0)]
+        x = x + self.pe[:x.size(0)].expand(-1, x.size(1), -1)
+        x = x + self.se[:x.size(0)].expand(-1, x.size(1), -1)
         return self.dropout(x)
 
 
