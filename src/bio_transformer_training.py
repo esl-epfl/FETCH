@@ -11,7 +11,7 @@ import torch
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader, TensorDataset
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss
-from torch.optim import SGD, Adam
+from torch.optim import SGD, AdamW
 from tqdm import tqdm
 import torch.nn.functional as F
 from sklearn.metrics import confusion_matrix
@@ -172,15 +172,16 @@ def pretrain():
     d_model = 768
     n_heads = 12
     d_hid = 4 * d_model
-    seq_len = SEQ_LEN + 2
+    seq_len = SEQ_LEN + 6
     segment = SEGMENT
     n_layers = 12
     n_out = 2
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print('device : ', device)
-    model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len,
-                           n_layers=n_layers,
-                           n_out=n_out, device=device, segments=segment).to(device)
+    # model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len,
+    #                        n_layers=n_layers,
+    #                        n_out=n_out, device=device, segments=segment).to(device)
+    model = torch.load("../output/pre_model300_n12")
 
     X_train = X["train"]
 
@@ -195,25 +196,24 @@ def pretrain():
     train_loader = DataLoader(train_set, batch_size=16, sampler=sampler, num_workers=4)
 
     # Training loop
-    optimizer = SGD(model.parameters(), lr=0.01)
+    optimizer = AdamW(model.parameters(), lr=1e-5)
     criterion = CrossEntropyLoss()
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.95)
-    N_EPOCHS = 30
-
+    N_EPOCHS = 20
+    val_loss_list = []
     for epoch in tqdm(range(N_EPOCHS), desc="Training"):
         model.train(True)  # turn on train mode
         train_loss = 0.0
         for i, batch in enumerate(tqdm(train_loader, desc=f"Epoch {epoch + 1}", position=0, leave=True)):
             optimizer.zero_grad()
-            x1, x2, y = batch['x1'], batch['x2'], batch['y']
+            x, y = batch['x'], batch['y']
             # print(np.min(np.sum(np.abs((X_train-x1[0,0].numpy())), axis=1)))
             # x1_index = np.argwhere(np.all(np.abs(X_train-x1[0,0].numpy())<1e-6, axis=1))[0,0]
             # x2_index = np.argwhere(np.all(np.abs(X_train-x2[0,0].numpy())<1e-6, axis=1))[0,0]
             # print(x1_index, x2_index, y.numpy()[0])
-            x1, x2, y = x1.to(device), x2.to(device), y.to(device)
-            x1 = torch.transpose(x1, 0, 1)
-            x2 = torch.transpose(x2, 0, 1)
-            y_hat = model(x1, x2)
+            x, y = x.to(device), y.to(device)
+            x = torch.transpose(x, 0, 1)
+            y_hat = model(x)
             loss = criterion(y_hat[-1, :, :], y.view(-1, ))
 
             train_loss += loss.detach().cpu().item()
@@ -226,22 +226,25 @@ def pretrain():
         with torch.no_grad():
             running_vloss = 0.0
             for i, batch in enumerate(validation_loader):
-                x1, x2, y = batch['x1'], batch['x2'], batch['y']
-                x1, x2, y = x1.to(device), x2.to(device), y.to(device)
-                x1 = torch.transpose(x1, 0, 1)
-                x2 = torch.transpose(x2, 0, 1)
-                voutputs = model(x1, x2)
+                x, y = batch['x'], batch['y']
+                x, y = x.to(device), y.to(device)
+                x = torch.transpose(x, 0, 1)
+                voutputs = model(x)
                 vloss = criterion(voutputs[-1, :, :], y.view(-1, ))
                 running_vloss += vloss.detach().cpu().item()
 
             avg_vloss = running_vloss / len(validation_loader)
             print('LOSS valid {}'.format(avg_vloss))
+            val_loss_list.append(avg_vloss)
+            if avg_vloss <= np.min(np.array(val_loss_list)):
+                torch.save(model.state_dict(), '../output/pre_model{}_n{}_best'.format(SEQ_LEN, n_layers))
+
         scheduler.step()
         lr = scheduler.get_last_lr()[0]
 
         print(f"Epoch {epoch + 1}/{N_EPOCHS} Training loss: {train_loss / len(train_loader):.2f} ")
 
-    torch.save(model, '../output/pre_model{}_n{}'.format(SEQ_LEN, n_layers))
+    torch.save(model.state_dict(), '../output/pre_model{}_n{}_2'.format(SEQ_LEN, n_layers))
     # torch.save(model.state_dict(), '../output/pre_model{}_state_n{}'.format(SEQ_LEN, n_layers))
 
 
@@ -352,7 +355,7 @@ def evaluate_pretraining():
                                                            torch.from_numpy(valid_labels['val']).int())
     validation_loader = DataLoader(validation_set, batch_size=16, num_workers=4)
 
-    model = torch.load('../output/pre_model{}_n12_31Aug'.format(SEQ_LEN))
+    model = torch.load('../output/pre_model{}_n12'.format(SEQ_LEN))
     print(model)
     # model.encoder.register_forward_hook(get_activation('encoder'))
     # model.pos_encoder.register_forward_hook(get_activation('pos_encoder'))
@@ -361,16 +364,15 @@ def evaluate_pretraining():
     test_predict = []
     test_labels = []
     randperm_seg = torch.randperm(SEGMENT)
-    randperm_roi = torch.randperm(ROI)
+    # randperm_roi = torch.randperm(SEQ_LEN)
     # since we're not training, we don't need to calculate the gradients for our outputs
     with torch.no_grad():
         for batch in tqdm(validation_loader, position=0, leave=True):
-            x1, x2, y = batch['x1'], batch['x2'], batch['y']
-            x1, x2 = x1[:, randperm_seg, :], x2[:, randperm_roi, :]
-            x1, x2, y = x1.to(device), x2.to(device), y.to(device)
-            x1 = torch.transpose(x1, 0, 1)
-            x2 = torch.transpose(x2, 0, 1)
-            y_hat = model(x1, x2)[-1,:,:]
+            x, y = batch['x'], batch['y']
+            x[:,:SEGMENT ,:] = x[:, randperm_seg, :]
+            x, y = x.to(device), y.to(device)
+            x = torch.transpose(x, 0, 1)
+            y_hat = model(x)[-1,:,:]
             _, predicted = torch.max(y_hat.data, 1)
             # print('predicted: {}'.format(predicted))
             test_predict += predicted.tolist()
@@ -400,8 +402,8 @@ def evaluate_pretraining():
 
 if __name__ == '__main__':
     # train()
-    # pretrain()
+    pretrain()
     # evaluate()
     # train_scratch()
-    evaluate_pretraining()
+    # evaluate_pretraining()
     # finetune()

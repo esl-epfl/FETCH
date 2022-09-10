@@ -76,14 +76,29 @@ def polygonal_approx(arr, epsilon):
 
 
 from scipy import signal
+from os import listdir
+from os.path import isfile, join
+import sys
 
+print(sys.argv)
+pat_num = sys.argv[1]
 
-dir_seizure_files = '../input/Epilepsiae_info/seizure_files'
+dir_total_files = '../raw_eeg/Patient_{}_all'.format(pat_num)
+onlyfiles = [f for f in listdir(dir_total_files) if isfile(join(dir_total_files, f))]
 
-for filename in pat_file_list[192:]:
+dir_output = '../non_seizure'
+file_prepared = [f.split('_zc.pickle')[0] for f in listdir(dir_output) if isfile(join(dir_output, f))]
+print(file_prepared)
+exit()
+
+for filename in onlyfiles:
+    if filename in pat_file_list:
+        continue
+    if filename in file_prepared:
+        print("{} is already prepared.".format(filename))
+        continue
     print(filename)
-
-    data = scipy.io.loadmat('{}/{}'.format(dir_seizure_files, filename))
+    data = scipy.io.loadmat('{}/{}'.format(dir_total_files, filename))
     signals = data['Signals']
 
     sos = signal.butter(4, [1, 20], 'bandpass', fs=fs, output='sos')
@@ -103,20 +118,20 @@ for filename in pat_file_list[192:]:
     for ch in range(numCh):
         sigFilt=allsigFilt[ch, :]
 
-        featOther = calculateOtherMLfeatures_oneCh(np.copy(sigFilt))
-        if (ch == 0):
-            AllFeatures = featOther
-        else:
-            AllFeatures = np.hstack((AllFeatures, featOther))
+        # featOther = calculateOtherMLfeatures_oneCh(np.copy(sigFilt))
+        # if (ch == 0):
+        #     AllFeatures = featOther
+        # else:
+        #     AllFeatures = np.hstack((AllFeatures, featOther))
 
-        # x = np.convolve(zero_crossings(sigFilt), np.ones(fs), mode='same')
-        # zeroCrossStandard = calculateMovingAvrgMeanWithUndersampling_v2(x, fs * 4, fs)
-        # zeroCrossFeaturesAll[:, num_feat * ch] = zeroCrossStandard
-        # for EPSthrIndx, EPSthr in enumerate(EPS_thresh_arr):
-        #     sigApprox = polygonal_approx(sigFilt, epsilon=EPSthr)
-        #     sigApproxInterp = np.interp(np.arange(len(sigFilt)), sigApprox, sigFilt[sigApprox])
-        #     x = np.convolve(zero_crossings(sigApproxInterp), np.ones(fs), mode='same')
-        #     zeroCrossApprox = calculateMovingAvrgMeanWithUndersampling_v2(x, fs *4 , fs)
-        #     zeroCrossFeaturesAll[:, num_feat * ch + EPSthrIndx + 1] = zeroCrossApprox
-    with open('../input/Epilepsiae_info/{}_feat.pickle'.format(filename), 'wb') as zc_file:
-        pickle.dump(AllFeatures, zc_file)
+        x = np.convolve(zero_crossings(sigFilt), np.ones(fs), mode='same')
+        zeroCrossStandard = calculateMovingAvrgMeanWithUndersampling_v2(x, fs * 4, fs)
+        zeroCrossFeaturesAll[:, num_feat * ch] = zeroCrossStandard
+        for EPSthrIndx, EPSthr in enumerate(EPS_thresh_arr):
+            sigApprox = polygonal_approx(sigFilt, epsilon=EPSthr)
+            sigApproxInterp = np.interp(np.arange(len(sigFilt)), sigApprox, sigFilt[sigApprox])
+            x = np.convolve(zero_crossings(sigApproxInterp), np.ones(fs), mode='same')
+            zeroCrossApprox = calculateMovingAvrgMeanWithUndersampling_v2(x, fs *4 , fs)
+            zeroCrossFeaturesAll[:, num_feat * ch + EPSthrIndx + 1] = zeroCrossApprox
+    with open('../non_seizure/{}_zc.pickle'.format(filename), 'wb') as zc_file:
+        pickle.dump(zeroCrossFeaturesAll, zc_file)
