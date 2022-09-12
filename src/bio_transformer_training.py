@@ -18,26 +18,30 @@ from sklearn.metrics import confusion_matrix
 from utils.BioT import SEQ_LEN, SEGMENT, ROI
 
 
-def get_data(mode='train'):
+def get_data(pretrain_mode=False):
     def set_labels(x):
         for seizure_num in range(len(x['onsets'])):
             start = max(x['onsets'][seizure_num][0] // 256 - 3, 0)
             end = x['offsets'][seizure_num][0] // 256 + 4
             x['labels'][start:end] = 1
-    df = pd.read_csv('../input/Epilepsiae_info/epilepsiae_labels.csv')
-    df['labels'] = df['length'].apply(lambda x: np.zeros(x // 256 - 4, dtype=np.int))
-    df['onsets'] = df['onsets'].apply(lambda x: json.loads(x.replace('\n', ',')))
-    df['offsets'] = df['offsets'].apply(lambda x: json.loads(x.replace('\n', ',')))
-    df.apply(set_labels, axis=1)
-    # df = df.groupby('patient').head(1)
+
+    rootdir = '../input/Epilepsiae_total' if pretrain_mode else '../input/Epilepsiae_info'
+    df = pd.read_csv(rootdir + '/epilepsiae_labels.csv')
+    if not pretrain_mode:
+        df['labels'] = df['length'].apply(lambda x: np.zeros(x // 256 - 4, dtype=np.int))
+        df['onsets'] = df['onsets'].apply(lambda x: json.loads(x.replace('\n', ',')))
+        df['offsets'] = df['offsets'].apply(lambda x: json.loads(x.replace('\n', ',')))
+        df.apply(set_labels, axis=1)
+
+    df = df.groupby('patient').head(1)
     df = df.sort_values(by='patient')
 
     test_set = [x for x in df['file_name'].tolist() if x.startswith('Patient_1_')]
-    if mode == "train":
-        validation_set = [x for x in df['file_name'].tolist() if x.startswith('Patient_2_')]
-    else:  # pretrain mode
+    if pretrain_mode:
         validation_set = [x for x in (df.groupby('patient').head(1))['file_name'].tolist() if
                           (x.startswith('Patient_2_') or x.startswith('Patient_3_'))]
+    else:  # pretrain mode
+        validation_set = [x for x in df['file_name'].tolist() if x.startswith('Patient_2_')]
     training_set = [x for x in df['file_name'].tolist() if (not x in test_set) and (not x in validation_set)]
     df_file_name = df.set_index('file_name')
 
@@ -50,12 +54,12 @@ def get_data(mode='train'):
                      'val': {new_list: [] for new_list in range(30)}}
     for mode in ['train', 'test', 'val']:
         for t_file in dataset[mode]:
-            with open('../input/Epilepsiae_info/{}_zc.pickle'.format(t_file), 'rb') as pickle_file:
+            with open(rootdir + '/{}_zc.pickle'.format(t_file), 'rb') as pickle_file:
                 # print(t_file)
                 data = pickle.load(pickle_file)
                 X[mode] = np.concatenate((X[mode], data), axis=0)
+                y = np.zeros(data.shape[0]) if pretrain_mode else df_file_name.loc[t_file, 'labels']
             pat_num = int(t_file.split('_')[1]) - 1
-            y = df_file_name.loc[t_file, 'labels']
 
             valid_start = labels[mode].shape[0] + SEQ_LEN-1
             valid_end = labels[mode].shape[0] + y.shape[0]
@@ -166,7 +170,7 @@ def get_pat_start_end(pat_file_start_end):
 
 
 def pretrain():
-    X, labels, valid_labels, pat_file_start_end = get_data(mode='pretrain')
+    X, labels, valid_labels, pat_file_start_end = get_data(pretrain_mode=True)
     print(pat_file_start_end)
     d_feature = 144
     d_model = 768
@@ -178,10 +182,10 @@ def pretrain():
     n_out = 2
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print('device : ', device)
-    # model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len,
-    #                        n_layers=n_layers,
-    #                        n_out=n_out, device=device, segments=segment).to(device)
-    model = torch.load("../output/pre_model300_n12")
+    model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len,
+                           n_layers=n_layers,
+                           n_out=n_out, device=device, segments=segment).to(device)
+    model.load_state_dict(torch.load("../output/pre_model300_n12_2"))
 
     X_train = X["train"]
 
@@ -192,7 +196,7 @@ def pretrain():
     validation_loader = DataLoader(validation_set, batch_size=16, num_workers=4)
 
     train_set = PatientDiscriminatorDataset(torch.from_numpy(X_train).float(), pat_start_end['train'])
-    sampler = EvaluateSampler(torch.from_numpy(valid_labels['train']).int(), overlap=10)
+    sampler = EvaluateSampler(torch.from_numpy(valid_labels['train']).int(), overlap=60)
     train_loader = DataLoader(train_set, batch_size=16, sampler=sampler, num_workers=4)
 
     # Training loop
@@ -346,7 +350,7 @@ def evaluate_pretraining():
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print('device: ',device)
-    X, labels, valid_labels, pat_file_start_end = get_data(mode='pretrain')
+    X, labels, valid_labels, pat_file_start_end = get_data(pretrain_mode=True)
     X_train = X["val"]
 
     pat_start_end = get_pat_start_end(pat_file_start_end)

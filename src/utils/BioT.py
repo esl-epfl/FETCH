@@ -152,7 +152,7 @@ class PatientDiscriminatorDataset(Dataset):
         self.pat_start = [x[0] for x in pat_start_end]
         self.pats = len(pat_start_end)
         self.roi_length = torch.tensor([30, 45, 60, 75, 90])
-        self.probability_length = torch.tensor([0.05, 0.15, 0.6, 0.15, 0.05])
+        self.probability_length = torch.tensor([0.2, 0.2, 0.2, 0.2, 0.2])
 
     def __len__(self):
         return self.x_total.shape[0]
