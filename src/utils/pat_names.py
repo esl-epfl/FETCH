@@ -52,3 +52,6 @@ pat_file_list = [
     'Patient_14_138.mat', 'Patient_10_116.mat', 'Patient_19_16.mat', 'Patient_23_195.mat', 'Patient_4_84.mat',
     'Patient_24_127.mat', 'Patient_2_55.mat', 'Patient_8_106.mat', 'Patient_13_88.mat', 'Patient_19_100.mat',
     'Patient_18_24.mat']
+
+
+EEG_channels = ['EEG FP1-REF', 'EEG FP2-REF', 'EEG F3-REF', 'EEG F4-REF', 'EEG C3-REF', 'EEG C4-REF', 'EEG P3-REF', 'EEG P4-REF', 'EEG O1-REF', 'EEG O2-REF', 'EEG F7-REF', 'EEG F8-REF', 'EEG T3-REF', 'EEG T4-REF', 'EEG T5-REF', 'EEG T6-REF', 'EEG A1-REF', 'EEG A2-REF', 'EEG FZ-REF', 'EEG CZ-REF', 'EEG PZ-REF']

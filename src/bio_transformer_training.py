@@ -33,7 +33,7 @@ def get_data(pretrain_mode=False):
         df['offsets'] = df['offsets'].apply(lambda x: json.loads(x.replace('\n', ',')))
         df.apply(set_labels, axis=1)
 
-    df = df.groupby('patient').head(1)
+    # df = df.groupby('patient').head(1)
     df = df.sort_values(by='patient')
 
     test_set = [x for x in df['file_name'].tolist() if x.startswith('Patient_1_')]
@@ -45,7 +45,7 @@ def get_data(pretrain_mode=False):
     training_set = [x for x in df['file_name'].tolist() if (not x in test_set) and (not x in validation_set)]
     df_file_name = df.set_index('file_name')
 
-    X = {'train': np.zeros((0, 144)), 'test': np.zeros((0, 144)), 'val': np.zeros((0, 144))}
+    X = {'train': np.zeros((15060645, 144)), 'test': np.zeros((552554, 144)), 'val': np.zeros((7192, 144))}
     labels = {'train': np.zeros((0, 1)), 'test': np.zeros((0, 1)), 'val': np.zeros((0, 1))}
     valid_labels = {'train': np.zeros(0, dtype=np.int), 'test': np.zeros(0, dtype=np.int), 'val': np.zeros(0, dtype=np.int)}
     dataset = {'train': training_set, 'test': test_set, 'val': validation_set}
@@ -53,11 +53,15 @@ def get_data(pretrain_mode=False):
                      'test': {new_list: [] for new_list in range(30)},
                      'val': {new_list: [] for new_list in range(30)}}
     for mode in ['train', 'test', 'val']:
+        total_len = 0
+        start_index = 0
         for t_file in dataset[mode]:
             with open(rootdir + '/{}_zc.pickle'.format(t_file), 'rb') as pickle_file:
                 # print(t_file)
                 data = pickle.load(pickle_file)
-                X[mode] = np.concatenate((X[mode], data), axis=0)
+                total_len += data.shape[0]
+                X[mode][start_index:start_index+data.shape[0]] = data
+                start_index += data.shape[0]
                 y = np.zeros(data.shape[0]) if pretrain_mode else df_file_name.loc[t_file, 'labels']
             pat_num = int(t_file.split('_')[1]) - 1
 
@@ -67,6 +71,7 @@ def get_data(pretrain_mode=False):
             labels[mode] = np.concatenate((labels[mode], np.expand_dims(y, axis=1)))
 
             pat_start_end[mode][pat_num].append((valid_start, valid_end))
+        print("total_len ",mode, total_len)
 
     print(X["train"].shape)
     print(X["val"].shape)
@@ -81,7 +86,7 @@ def get_data(pretrain_mode=False):
 
 
 def train(model, device, save_path:str, learning_rate:float = 0.01):
-    X, labels, valid_labels, _ = get_data()
+    X, labels, valid_labels, _ = get_data(pretrain_mode=False)
 
     # %%
     seizure_indices = np.where(labels['train'] == 1)[0]
@@ -105,10 +110,10 @@ def train(model, device, save_path:str, learning_rate:float = 0.01):
     val_loader = DataLoader(val_set, shuffle=False, sampler=val_sampler, batch_size=16)
 
     # Training loop
-    optimizer = SGD(model.parameters(), lr=learning_rate)
+    optimizer = AdamW(model.parameters(), lr=learning_rate)
     criterion = CrossEntropyLoss()
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.95)
-    N_EPOCHS = 20
+    N_EPOCHS = 40
     train_loss_list = []
     val_loss_list = []
 
@@ -119,11 +124,9 @@ def train(model, device, save_path:str, learning_rate:float = 0.01):
         for i, batch in enumerate(tqdm(train_loader, desc=f"Epoch {epoch + 1}", position=0, leave=True)):
             optimizer.zero_grad()
             x, y = batch['x'], batch['y']
-            x1, x2 = x[:,:SEGMENT, :], x[:, SEGMENT:,:]
-            x1, x2, y = x1.to(device), x2.to(device), y.to(device)
-            x1 = torch.transpose(x1, 0, 1)
-            x2 = torch.transpose(x2, 0, 1)
-            y_hat = model(x1, x2)
+            x, y = x.to(device), y.to(device)
+            x = torch.transpose(x, 0, 1)
+            y_hat = model(x)
             loss = criterion(y_hat[-1, :, :], y.view(-1, ))
 
             train_loss += loss.detach().cpu().item()
@@ -136,11 +139,9 @@ def train(model, device, save_path:str, learning_rate:float = 0.01):
             running_vloss = 0.0
             for i, batch in enumerate(val_loader):
                 x, y = batch['x'], batch['y']
-                x1, x2 = x[:, :SEGMENT, :], x[:, SEGMENT:, :]
-                x1, x2, y = x1.to(device), x2.to(device), y.to(device)
-                x1 = torch.transpose(x1, 0, 1)
-                x2 = torch.transpose(x2, 0, 1)
-                voutputs = model(x1, x2)
+                x, y = x.to(device), y.to(device)
+                x = torch.transpose(x, 0, 1)
+                voutputs = model(x)
                 vloss = criterion(voutputs[-1, :, :], y.view(-1, ))
                 running_vloss += vloss.detach().cpu().item()
 
@@ -153,6 +154,9 @@ def train(model, device, save_path:str, learning_rate:float = 0.01):
 
             print(f"Epoch {epoch + 1}/{N_EPOCHS} Training loss: {train_loss/len(train_loader):.2f} ")
             train_loss_list.append(train_loss/len(train_loader))
+
+            if avg_vloss <= np.min(np.array(val_loss_list)):
+                torch.save(model.state_dict(), save_path + '_best')
 
     torch.save(model, save_path)
     print("Validation_loss_list = ", val_loss_list)
@@ -185,7 +189,7 @@ def pretrain():
     model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len,
                            n_layers=n_layers,
                            n_out=n_out, device=device, segments=segment).to(device)
-    model.load_state_dict(torch.load("../output/pre_model300_n12_2"))
+    # model.load_state_dict(torch.load("../output/pre_model300_n12_2"))
 
     X_train = X["train"]
 
@@ -270,25 +274,37 @@ def train_scratch():
 
 
 def finetune():
-    model = torch.load('../output/pre_model{}_n12'.format(SEQ_LEN))
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print('device : ', device)
-    savepath = '../output/finetuned_model{}_n12_frozen12'.format(SEQ_LEN)
+
+    d_feature = 144
+    d_model = 768
+    n_heads = 12
+    d_hid = 4 * d_model
+    seq_len = SEQ_LEN + 6
+    segment = SEGMENT
+    n_layers = 12
+    n_out = 2
+
+    model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len,
+                           n_layers=n_layers,
+                           n_out=n_out, device=device, segments=segment).to(device)
+    model.load_state_dict(torch.load("../output/pre_model300_n12_2"))
+
+    savepath = '../output/finetuned_model{}_n12'.format(SEQ_LEN)
     model.decoder.weight.data.uniform_(-0.1, 0.1)
     model.decoder.bias.data.uniform_(-0.1, 0.1)
-    model.encoder.weight.requires_grad = False
-    model.encoder.bias.requires_grad = False
-    model.sep_token.requires_grad = False
-    model.class_token.requires_grad = False
-    for layer_num in range(12):
-        for param in model.transformer_encoder.layers[layer_num].parameters():
-            param.requires_grad = False
+    # model.sep_token.requires_grad = False
+    # model.class_token.requires_grad = False
+    # for layer_num in range(12):
+    #     for param in model.transformer_encoder.layers[layer_num].parameters():
+    #         param.requires_grad = False
 
     for name, param in model.named_parameters():
         if param.requires_grad:
             print(
             name, param.data.shape)
-    train(model,device, savepath, learning_rate=0.001)
+    train(model,device, savepath, learning_rate=1e-5)
 
 
 def print_results(conf):
