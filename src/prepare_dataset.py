@@ -2,8 +2,9 @@ import numpy as np
 import scipy.io
 import os
 import pickle
-from eglass import calculateMLfeatures
-from utils.pat_names import pat_file_list
+# from eglass import calculateMLfeatures
+from utils.pat_names import pat_file_list, EEG_channels
+import pyedflib
 
 fs = 256
 
@@ -72,6 +73,16 @@ def polygonal_approx(arr, epsilon):
         else:
             result.update((first, last))
     return np.array(sorted(result))
+
+
+def get_EEG_index(eeg_labels):
+    indices = []
+    for label in EEG_channels:
+        if label in eeg_labels:
+            indices.append(eeg_labels.index(label))
+        else:
+            indices.append(-1)
+    return indices
 #%%
 
 
@@ -83,29 +94,45 @@ import sys
 print(sys.argv)
 pat_num = sys.argv[1]
 
-dir_total_files = '../raw_eeg/Patient_{}_all'.format(pat_num)
-onlyfiles = [f for f in listdir(dir_total_files) if isfile(join(dir_total_files, f))]
+filenames_list = []
+dir_total_files = '../TUSZ/edf/train/01_tcp_ar/{}'.format(pat_num)
+for subdir in listdir(dir_total_files):
+    for subsubdir in listdir(join(dir_total_files, subdir)):
+        filenames_list += [join(dir_total_files, subdir, subsubdir, edf_file) for edf_file
+                           in listdir(join(dir_total_files, subdir, subsubdir)) if edf_file.endswith('.edf')]
+# print(filenames_list)
 
-dir_output = '../non_seizure'
+dir_output = '../TUSZ_zc/01_tcp_ar/{}'.format(pat_num)
+
 file_prepared = [f.split('_zc.pickle')[0] for f in listdir(dir_output) if isfile(join(dir_output, f))]
 print(file_prepared)
-exit()
 
-for filename in onlyfiles:
-    if filename in pat_file_list:
-        continue
-    if filename in file_prepared:
+for filename in filenames_list:
+    # if filename in pat_file_list:
+    #     continue
+    if filename.split('/')[-1] in file_prepared:
         print("{} is already prepared.".format(filename))
         continue
     print(filename)
-    data = scipy.io.loadmat('{}/{}'.format(dir_total_files, filename))
-    signals = data['Signals']
+    # data = scipy.io.loadmat('{}/{}'.format(dir_total_files, filename))
+    # signals = data['Signals']
+    f = pyedflib.EdfReader(filename)
+    signal_labels = f.getSignalLabels()
+    indices = get_EEG_index(signal_labels)
+    signal_shape = f.readSignal(0).shape
+    signals = np.zeros((len(EEG_channels), signal_shape[0]))
+    for row, EEG_index in enumerate(indices):
+        if EEG_index == -1:
+            continue
+        signals[row, :] = f.readSignal(EEG_index)
 
+    print(signals.shape)
     sos = signal.butter(4, [1, 20], 'bandpass', fs=fs, output='sos')
     allsigFilt = signal.sosfiltfilt(sos, signals, axis=1)
+    print(allsigFilt.shape)
 
     #%%
-    numCh = 24
+    numCh = len(EEG_channels)
     num_feat = 6
     win_len = 4
     EPS_thresh_arr=[16, 32, 64, 128, 256]
@@ -116,7 +143,7 @@ for filename in onlyfiles:
     zeroCrossFeaturesAll = np.zeros((length, num_feat * numCh))
 
     for ch in range(numCh):
-        sigFilt=allsigFilt[ch, :]
+        sigFilt=allsigFilt[ch, :(allsigFilt.shape[1] // fs)*fs]
 
         # featOther = calculateOtherMLfeatures_oneCh(np.copy(sigFilt))
         # if (ch == 0):
@@ -133,5 +160,5 @@ for filename in onlyfiles:
             x = np.convolve(zero_crossings(sigApproxInterp), np.ones(fs), mode='same')
             zeroCrossApprox = calculateMovingAvrgMeanWithUndersampling_v2(x, fs *4 , fs)
             zeroCrossFeaturesAll[:, num_feat * ch + EPSthrIndx + 1] = zeroCrossApprox
-    with open('../non_seizure/{}_zc.pickle'.format(filename), 'wb') as zc_file:
+    with open('../TUSZ_zc/01_tcp_ar/{}/{}_zc.pickle'.format(pat_num, filename.split('/')[-1]), 'wb') as zc_file:
         pickle.dump(zeroCrossFeaturesAll, zc_file)
