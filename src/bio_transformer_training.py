@@ -18,17 +18,21 @@ from sklearn.metrics import confusion_matrix
 from utils.BioT import SEQ_LEN, SEGMENT, ROI
 
 
-def get_data(pretrain_mode=False):
+def get_data(pretrain_mode=False, fs=250, dataset='TUSZ'):
     def set_labels(x):
         for seizure_num in range(len(x['onsets'])):
-            start = max(x['onsets'][seizure_num][0] // 256 - 3, 0)
-            end = x['offsets'][seizure_num][0] // 256 + 4
+            start = max(x['onsets'][seizure_num][0] // fs - 3, 0)
+            end = x['offsets'][seizure_num][0] // fs + 4
             x['labels'][start:end] = 1
-
-    rootdir = '../input/Epilepsiae_total' if pretrain_mode else '../input/Epilepsiae_info'
-    df = pd.read_csv(rootdir + '/epilepsiae_labels.csv')
+    if dataset == "epilepsiae":
+        rootdir = '../input/Epilepsiae_total' if pretrain_mode else '../input/Epilepsiae_info'
+    elif dataset == "TUSZ":
+        rootdir = "../TUSZ_zc"
+    else:
+        raise Exception("Dataset unknown!")
+    df = pd.read_csv(rootdir + '/{}_labels.csv'.format(dataset))
     if not pretrain_mode:
-        df['labels'] = df['length'].apply(lambda x: np.zeros(x // 256 - 4, dtype=np.int))
+        df['labels'] = df['length'].apply(lambda x: np.zeros(x // fs - 4, dtype=np.int))
         df['onsets'] = df['onsets'].apply(lambda x: json.loads(x.replace('\n', ',')))
         df['offsets'] = df['offsets'].apply(lambda x: json.loads(x.replace('\n', ',')))
         df.apply(set_labels, axis=1)
@@ -36,40 +40,56 @@ def get_data(pretrain_mode=False):
     # df = df.groupby('patient').head(1)
     df = df.sort_values(by='patient')
 
-    test_set = [x for x in df['file_name'].tolist() if x.startswith('Patient_1_')]
-    if pretrain_mode:
+    if dataset == "epilepsiae":
+        test_set = [x for x in df['file_name'].tolist() if x.startswith('Patient_1_')]
+        if pretrain_mode:
+            validation_set = [x for x in (df.groupby('patient').head(1))['file_name'].tolist() if
+                              (x.startswith('Patient_2_') or x.startswith('Patient_3_'))]
+        else:  # pretrain mode
+            validation_set = [x for x in df['file_name'].tolist() if x.startswith('Patient_2_')]
+    else:  # dataset = TUSZ
+        test_set = [x for x in df['file_name'].tolist() if x.startswith('dev')]
         validation_set = [x for x in (df.groupby('patient').head(1))['file_name'].tolist() if
-                          (x.startswith('Patient_2_') or x.startswith('Patient_3_'))]
-    else:  # pretrain mode
-        validation_set = [x for x in df['file_name'].tolist() if x.startswith('Patient_2_')]
+                          ('01479' in x or '01402' in x)]
+
     training_set = [x for x in df['file_name'].tolist() if (not x in test_set) and (not x in validation_set)]
     df_file_name = df.set_index('file_name')
 
-    X = {'train': np.zeros((15060645, 144)), 'test': np.zeros((552554, 144)), 'val': np.zeros((7192, 144))}
+    feature_size = 126 if dataset == "TUSZ" else 144
+    train_len = 3050138 if dataset == "TUSZ" else 15060645
+    val_len = 2455 if dataset == "TUSZ" else 7192
+    test_len = 552554
+    X = {'train': np.zeros((train_len, feature_size)),
+         'test': np.zeros((test_len, feature_size)),
+         'val': np.zeros((val_len, feature_size))}
     labels = {'train': np.zeros((0, 1)), 'test': np.zeros((0, 1)), 'val': np.zeros((0, 1))}
     valid_labels = {'train': np.zeros(0, dtype=np.int), 'test': np.zeros(0, dtype=np.int), 'val': np.zeros(0, dtype=np.int)}
-    dataset = {'train': training_set, 'test': test_set, 'val': validation_set}
+    total_dataset = {'train': training_set, 'test': test_set, 'val': validation_set}
     pat_start_end = {'train': {new_list: [] for new_list in range(30)},
                      'test': {new_list: [] for new_list in range(30)},
                      'val': {new_list: [] for new_list in range(30)}}
-    for mode in ['train', 'test', 'val']:
+    for mode in ['train', 'val']:
         total_len = 0
         start_index = 0
-        for t_file in dataset[mode]:
+        for t_file in total_dataset[mode]:
             with open(rootdir + '/{}_zc.pickle'.format(t_file), 'rb') as pickle_file:
                 # print(t_file)
                 data = pickle.load(pickle_file)
+                if pretrain_mode and data.shape[0] < SEQ_LEN:  # very short files
+                    continue
                 total_len += data.shape[0]
                 X[mode][start_index:start_index+data.shape[0]] = data
                 start_index += data.shape[0]
                 y = np.zeros(data.shape[0]) if pretrain_mode else df_file_name.loc[t_file, 'labels']
-            pat_num = int(t_file.split('_')[1]) - 1
+            pat_num = t_file.split('/')[-1].split('_')[0] if dataset=="TUSZ" else int(t_file.split('_')[1]) - 1
 
             valid_start = labels[mode].shape[0] + SEQ_LEN-1
             valid_end = labels[mode].shape[0] + y.shape[0]
             valid_labels[mode] = np.concatenate((valid_labels[mode],  np.arange(start= valid_start, stop= valid_end)))
             labels[mode] = np.concatenate((labels[mode], np.expand_dims(y, axis=1)))
 
+            if pat_num not in pat_start_end[mode]:
+                pat_start_end[mode][pat_num] = []
             pat_start_end[mode][pat_num].append((valid_start, valid_end))
         print("total_len ",mode, total_len)
 
@@ -166,17 +186,17 @@ def train(model, device, save_path:str, learning_rate:float = 0.01):
 def get_pat_start_end(pat_file_start_end):
     pat_start_end = {"train": [], "val": []}
     for mode in ["train", "val"]:
-        for p in range(30):
+        for p in pat_file_start_end[mode]:
             if len(pat_file_start_end[mode][p]) == 0:
                 continue
             pat_start_end[mode].append((pat_file_start_end[mode][p][0][0], pat_file_start_end[mode][p][-1][-1]))
     return pat_start_end
 
 
-def pretrain():
-    X, labels, valid_labels, pat_file_start_end = get_data(pretrain_mode=True)
+def pretrain(dataset):
+    X, labels, valid_labels, pat_file_start_end = get_data(pretrain_mode=True, dataset=dataset)
     print(pat_file_start_end)
-    d_feature = 144
+    d_feature = 126 if dataset == "TUSZ" else 144
     d_model = 768
     n_heads = 12
     d_hid = 4 * d_model
@@ -194,6 +214,8 @@ def pretrain():
     X_train = X["train"]
 
     pat_start_end = get_pat_start_end(pat_file_start_end)
+
+    print("Pat Start End: ", pat_start_end)
 
     validation_set = PatientDiscriminatorEvaluationDataset(torch.from_numpy(X["val"]).float(), pat_start_end['val'],
                                                            torch.from_numpy(valid_labels['val']).int())
@@ -422,7 +444,7 @@ def evaluate_pretraining():
 
 if __name__ == '__main__':
     # train()
-    pretrain()
+    pretrain("TUSZ")
     # evaluate()
     # train_scratch()
     # evaluate_pretraining()

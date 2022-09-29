@@ -172,7 +172,7 @@ class PatientDiscriminatorDataset(Dataset):
             label = 0
             pat_sample = pat_num
 
-        idx_sample = torch.randint(low=self.pat_start_end[pat_sample][0] + seg_random,
+        idx_sample = torch.randint(low=max(self.pat_start_end[pat_sample][0], seg_random),
                                    high=self.pat_start_end[pat_sample][1],
                                    size=(1,))
         x_prior = self.x_total[idx_sample - seg_random:idx_sample, :]

@@ -6,7 +6,7 @@ import pickle
 from utils.pat_names import pat_file_list, EEG_channels
 import pyedflib
 
-fs = 256
+fs = 250
 
 
 def zero_crossings(arr):
