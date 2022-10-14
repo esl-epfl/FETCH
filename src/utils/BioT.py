@@ -26,7 +26,6 @@ class BioTransformer(nn.Module):
         self.seq_len = seq_len
 
         self.roi_length = torch.tensor([90, 75, 60, 45, 30, 0])
-
         encoder_layers = TransformerEncoderLayer(d_model, n_heads, d_hid)
         self.transformer_encoder = TransformerEncoder(encoder_layers, n_layers)
         self.encoder = nn.Linear(d_feature, d_model)
@@ -34,8 +33,8 @@ class BioTransformer(nn.Module):
         self.decoder = nn.Linear(d_model, n_out)
         self.sigmoid = nn.Sigmoid()
 
-        self.class_token = nn.Parameter(torch.rand(1, d_model))
-        self.sep_token = nn.Parameter(torch.rand(1, d_model))
+        self.cls_token = nn.Parameter(torch.rand(1, 1, d_model))
+        self.sep_token = nn.Parameter(torch.rand(1, 1, d_model))
 
         self.init_weights()
 
@@ -63,6 +62,7 @@ class BioTransformer(nn.Module):
 
 class PositionalEncoding(nn.Module):
 
+
     def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000, segment_length: Tensor = 0):
         super().__init__()
         self.dropout = nn.Dropout(p=dropout)
@@ -85,8 +85,8 @@ class PositionalEncoding(nn.Module):
         Args:
             x: Tensor, shape [seq_len, batch_size, embedding_dim]
         """
-        x = x + self.pe[:x.size(0)]
-        x = x + self.se[:x.size(0)]
+        x = x + self.pe[:x.size(0)].expand(-1, x.size(1), -1)
+        x = x + self.se[:x.size(0)].expand(-1, x.size(1), -1)
         return self.dropout(x)
 
 

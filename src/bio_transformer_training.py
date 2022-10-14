@@ -170,6 +170,8 @@ def train(model, device, save_path:str, learning_rate:float = 0.01):
             avg_vloss = running_vloss/ len(val_loader)
             print('LOSS valid {}'.format(avg_vloss))
             val_loss_list.append(avg_vloss)
+            if avg_vloss < np.min(np.array(val_loss_list)):
+                torch.save(model, "{}_best".format(save_path))
 
             scheduler.step()
             lr = scheduler.get_last_lr()[0]
