@@ -39,6 +39,8 @@ def get_data(pretrain_mode=False, fs=250, dataset='TUSZ'):
 
     # df = df.groupby('patient').head(1)
     df = df.sort_values(by='patient')
+    # print(df.sample(n=5))
+    # exit()
 
     if dataset == "epilepsiae":
         test_set = [x for x in df['file_name'].tolist() if x.startswith('Patient_1_')]
@@ -388,8 +390,8 @@ def evaluate_pretraining():
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print('device: ',device)
-    X, labels, valid_labels, pat_file_start_end = get_data(pretrain_mode=True)
-    X_train = X["val"]
+    X, labels, valid_labels, pat_file_start_end = get_data(pretrain_mode=False, dataset="epilepsiae")
+    X_train = X["train"]
 
     pat_start_end = get_pat_start_end(pat_file_start_end)
 
@@ -442,10 +444,54 @@ def evaluate_pretraining():
     print_results(conf)
 
 
+def visualize_model():
+    x_total = np.zeros((0,126))
+    for t_file in [
+        # "../input/Epilepsiae_info/Patient_1_26.mat_zc.pickle",
+        # "../input/Epilepsiae_info/Patient_1_37.mat_zc.pickle",
+        "../input/TUSZ/00000254_s005_t000.edf_zc.pickle",
+        "../input/TUSZ/00000272_s007_t000.edf_zc.pickle",
+        "../input/TUSZ/00012679_s003_t010.edf_zc.pickle",
+    ]:
+        with open(t_file, 'rb') as pickle_file:
+            # print(t_file)
+            data = pickle.load(pickle_file)
+            print(data.shape)
+            x_total = np.concatenate((x_total, data))
+    x_total = (x_total-4.41) / 8.6
+    d_feature = 126
+    d_model = 768
+    n_heads = 12
+    d_hid = 4 * d_model
+    seq_len = SEQ_LEN + 6
+    segment = SEGMENT
+    n_layers = 12
+    n_out = 2
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print('device : ', device)
+    model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len,
+                           n_layers=n_layers,
+                           n_out=n_out, device=device, segments=segment).to(device)
+    model.load_state_dict(torch.load('../output/pre_model300_n12_best'))
+    print(model)
+
+    start_point = 1438 - SEGMENT
+    x= torch.unsqueeze(torch.from_numpy(x_total[start_point:start_point+SEQ_LEN]).float().to(device), dim=0)
+    print(x.shape)
+    x = torch.transpose(x, 0, 1)
+    result = model(x)
+    print(result.shape)
+    print(result[-1, :, :])
+    plt.figure(figsize=(6, 6))
+    sns.heatmap(x[:, 0, :].cpu().numpy().transpose(), cmap="magma_r")
+    plt.savefig('../output/figures/pat254_272.png')
+
+
 if __name__ == '__main__':
     # train()
-    pretrain("TUSZ")
+    # pretrain("TUSZ")
     # evaluate()
     # train_scratch()
     # evaluate_pretraining()
     # finetune()
+    visualize_model()
