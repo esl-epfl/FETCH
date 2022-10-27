@@ -53,5 +53,47 @@ pat_file_list = [
     'Patient_24_127.mat', 'Patient_2_55.mat', 'Patient_8_106.mat', 'Patient_13_88.mat', 'Patient_19_100.mat',
     'Patient_18_24.mat']
 
+EEG_channels = ['EEG FP1-REF', 'EEG FP2-REF', 'EEG F3-REF', 'EEG F4-REF', 'EEG C3-REF', 'EEG C4-REF', 'EEG P3-REF',
+                'EEG P4-REF', 'EEG O1-REF', 'EEG O2-REF', 'EEG F7-REF', 'EEG F8-REF', 'EEG T3-REF', 'EEG T4-REF',
+                'EEG T5-REF', 'EEG T6-REF', 'EEG A1-REF', 'EEG A2-REF', 'EEG FZ-REF', 'EEG CZ-REF', 'EEG PZ-REF']
 
-EEG_channels = ['EEG FP1-REF', 'EEG FP2-REF', 'EEG F3-REF', 'EEG F4-REF', 'EEG C3-REF', 'EEG C4-REF', 'EEG P3-REF', 'EEG P4-REF', 'EEG O1-REF', 'EEG O2-REF', 'EEG F7-REF', 'EEG F8-REF', 'EEG T3-REF', 'EEG T4-REF', 'EEG T5-REF', 'EEG T6-REF', 'EEG A1-REF', 'EEG A2-REF', 'EEG FZ-REF', 'EEG CZ-REF', 'EEG PZ-REF']
+EEG_channels_LE = ['EEG FP1-LE', 'EEG FP2-LE', 'EEG F3-LE', 'EEG F4-LE', 'EEG C3-LE', 'EEG C4-LE', 'EEG P3-LE',
+                'EEG P4-LE', 'EEG O1-LE', 'EEG O2-LE', 'EEG F7-LE', 'EEG F8-LE', 'EEG T3-LE', 'EEG T4-LE',
+                'EEG T5-LE', 'EEG T6-LE', 'EEG A1-LE', 'EEG A2-LE', 'EEG FZ-LE', 'EEG CZ-LE', 'EEG PZ-LE']
+
+# feature_size = 126 if dataset == "TUSZ" else 144
+# train_len = 3050138 if dataset == "TUSZ" else 15060645
+# val_len = 2455 if dataset == "TUSZ" else 7192
+# test_len = 552554
+
+dataset_parameter = {"TUSZ": {
+    "pretrain": {
+        "feature_size": 126,
+        "train_len": 3050138,
+        "val_len": 2455,
+        "test_len": 0
+    },
+    "scratch": {
+        "feature_size": 126,
+        "train_len": 2690893,
+        "val_len": 1194,
+        "test_len": 609180
+    }
+},
+    "Epilepsiae": {
+        "pretrain": {
+            "feature_size": 126,
+            "train_len": 3050138,  # TODO: update the length
+            "val_len": 2455,
+            "test_len": 0
+        },
+        "scratch": {
+            "feature_size": 126,
+            "train_len": 3050138,  # TODO: update the length
+            "val_len": 2455,
+            "test_len": 0
+        }
+
+    }
+}
+

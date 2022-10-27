@@ -16,13 +16,17 @@ from tqdm import tqdm
 import torch.nn.functional as F
 from sklearn.metrics import confusion_matrix
 from utils.BioT import SEQ_LEN, SEGMENT, ROI
+from utils.params import dataset_parameter
 
 
-def get_data(pretrain_mode=False, fs=250, dataset='TUSZ'):
+def get_data(pretrain_mode=False, dataset='TUSZ'):
     def set_labels(x):
+
         for seizure_num in range(len(x['onsets'])):
-            start = max(x['onsets'][seizure_num][0] // fs - 3, 0)
-            end = x['offsets'][seizure_num][0] // fs + 4
+            if x['onsets'][seizure_num][0] == x['offsets'][seizure_num][0]:
+                continue
+            start = max(x['onsets'][seizure_num][0] // x['fs_FP1'] - 3, 0)
+            end = x['offsets'][seizure_num][0] // x['fs_FP1'] + 4
             x['labels'][start:end] = 1
     if dataset == "epilepsiae":
         rootdir = '../input/Epilepsiae_total' if pretrain_mode else '../input/Epilepsiae_info'
@@ -32,15 +36,14 @@ def get_data(pretrain_mode=False, fs=250, dataset='TUSZ'):
         raise Exception("Dataset unknown!")
     df = pd.read_csv(rootdir + '/{}_labels.csv'.format(dataset))
     if not pretrain_mode:
-        df['labels'] = df['length'].apply(lambda x: np.zeros(x // fs - 4, dtype=np.int))
+        df['labels_len'] = (df['length'] // df['fs_FP1']) - 4
+        df['labels'] = df['labels_len'].apply(lambda x: np.zeros(x, dtype=np.int))
         df['onsets'] = df['onsets'].apply(lambda x: json.loads(x.replace('\n', ',')))
         df['offsets'] = df['offsets'].apply(lambda x: json.loads(x.replace('\n', ',')))
         df.apply(set_labels, axis=1)
 
     # df = df.groupby('patient').head(1)
     df = df.sort_values(by='patient')
-    # print(df.sample(n=5))
-    # exit()
 
     if dataset == "epilepsiae":
         test_set = [x for x in df['file_name'].tolist() if x.startswith('Patient_1_')]
@@ -52,15 +55,16 @@ def get_data(pretrain_mode=False, fs=250, dataset='TUSZ'):
     else:  # dataset = TUSZ
         test_set = [x for x in df['file_name'].tolist() if x.startswith('dev')]
         validation_set = [x for x in (df.groupby('patient').head(1))['file_name'].tolist() if
-                          ('01479' in x or '01402' in x)]
+                          ('06175' in x or '06514' in x)]
 
     training_set = [x for x in df['file_name'].tolist() if (not x in test_set) and (not x in validation_set)]
     df_file_name = df.set_index('file_name')
 
-    feature_size = 126 if dataset == "TUSZ" else 144
-    train_len = 3050138 if dataset == "TUSZ" else 15060645
-    val_len = 2455 if dataset == "TUSZ" else 7192
-    test_len = 552554
+    pretrain_scratch_mode = "pretrain" if pretrain_mode else "scratch"
+    feature_size = dataset_parameter[dataset][pretrain_scratch_mode]["feature_size"]
+    train_len = dataset_parameter[dataset][pretrain_scratch_mode]["train_len"]
+    val_len = dataset_parameter[dataset][pretrain_scratch_mode]["val_len"]
+    test_len = dataset_parameter[dataset][pretrain_scratch_mode]["test_len"]
     X = {'train': np.zeros((train_len, feature_size)),
          'test': np.zeros((test_len, feature_size)),
          'val': np.zeros((val_len, feature_size))}
@@ -70,19 +74,22 @@ def get_data(pretrain_mode=False, fs=250, dataset='TUSZ'):
     pat_start_end = {'train': {new_list: [] for new_list in range(30)},
                      'test': {new_list: [] for new_list in range(30)},
                      'val': {new_list: [] for new_list in range(30)}}
-    for mode in ['train', 'val']:
+    error_shapes = ""
+    for mode in ['train', 'val', 'test']:
         total_len = 0
         start_index = 0
         for t_file in total_dataset[mode]:
             with open(rootdir + '/{}_zc.pickle'.format(t_file), 'rb') as pickle_file:
                 # print(t_file)
                 data = pickle.load(pickle_file)
-                if pretrain_mode and data.shape[0] < SEQ_LEN:  # very short files
-                    continue
+                # if pretrain_mode and data.shape[0] < SEQ_LEN:  # very short files
+                #     continue
                 total_len += data.shape[0]
                 X[mode][start_index:start_index+data.shape[0]] = data
                 start_index += data.shape[0]
                 y = np.zeros(data.shape[0]) if pretrain_mode else df_file_name.loc[t_file, 'labels']
+                if data.shape[0] != y.shape[0]:
+                    error_shapes += "Error in shape of {}: {} and {}\n".format(t_file, data.shape, y.shape)
             pat_num = t_file.split('/')[-1].split('_')[0] if dataset=="TUSZ" else int(t_file.split('_')[1]) - 1
 
             valid_start = labels[mode].shape[0] + SEQ_LEN-1
@@ -94,7 +101,6 @@ def get_data(pretrain_mode=False, fs=250, dataset='TUSZ'):
                 pat_start_end[mode][pat_num] = []
             pat_start_end[mode][pat_num].append((valid_start, valid_end))
         print("total_len ",mode, total_len)
-
     print(X["train"].shape)
     print(X["val"].shape)
     print(X["test"].shape)
@@ -123,6 +129,7 @@ def train(model, device, save_path:str, learning_rate:float = 0.01):
 
     print(Y.dtype)
     print(X_train.shape, Y.shape)
+    exit()
     train_set = Epilepsy60Dataset(torch.from_numpy(X_train).float(), torch.from_numpy(Y).long())
     sampler = ImbalancedDataSampler(torch.from_numpy(valid_seizures), torch.from_numpy(valid_non_seizure))
     train_loader = DataLoader(train_set, batch_size=16, sampler=sampler, num_workers=4)
@@ -282,8 +289,8 @@ def pretrain(dataset):
     # torch.save(model.state_dict(), '../output/pre_model{}_state_n{}'.format(SEQ_LEN, n_layers))
 
 
-def train_scratch():
-    d_feature = 144
+def train_scratch(dataset):
+    d_feature = 126 if dataset == "TUSZ" else 144
     d_model = 768
     n_heads = 12
     d_hid = 4 * d_model
@@ -493,7 +500,7 @@ if __name__ == '__main__':
     # train()
     # pretrain("TUSZ")
     # evaluate()
-    # train_scratch()
+    train_scratch(dataset="TUSZ")
     # evaluate_pretraining()
     # finetune()
-    visualize_model()
+    # visualize_model()

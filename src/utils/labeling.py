@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 import scipy.io
-from pat_names import pat_file_list
+from params import pat_file_list
 import pandas
 
 dir_seizure_files = '../../input/Epilepsiae_info/seizure_files'
