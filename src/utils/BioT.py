@@ -52,7 +52,7 @@ class BioTransformer(nn.Module):
             tokens = torch.cat((tokens, self.sep_token.repeat(1, n, 1),
                                 src[SEQ_LEN - self.roi_length[i]: SEQ_LEN - self.roi_length[i+1], :, :]), dim=0)
 
-        tokens = torch.cat((tokens, self.class_token.repeat(1, n, 1)), dim=0)
+        tokens = torch.cat((tokens, self.cls_token.repeat(1, n, 1)), dim=0)
         tokens = self.pos_encoder(tokens)
         output = self.transformer_encoder(tokens)
         output = self.decoder(output)
@@ -91,9 +91,10 @@ class PositionalEncoding(nn.Module):
 
 
 class Epilepsy60Dataset(Dataset):
-    def __init__(self, x_total, y_total):
+    def __init__(self, x_total, y_total, sample_time):
         self.x_total = x_total
         self.y_total = y_total
+        self.sample_time = sample_time
 
     def __len__(self):
         return self.x_total.shape[0]
@@ -102,30 +103,36 @@ class Epilepsy60Dataset(Dataset):
         # if torch.is_tensor(idx):
         #     idx = idx.tolist()
 
-        if idx < SEQ_LEN:
-            # x60_zero = np.zeros((59-idx, self.x_total.shape[1]), dtype=np.float)
-            # x60 = np.concatenate((x60_zero, self.x_total[0:idx+1, :]))
-            x60 = self.x_total[0:SEQ_LEN, :]
-            y60 = self.y_total[SEQ_LEN]
+        if self.sample_time[idx] < SEQ_LEN:
+            valid_len = self.sample_time[idx]
+            zero_pad = torch.zeros((SEQ_LEN-valid_len-1, self.x_total.shape[1]), dtype=torch.float)
+            x60 = torch.cat((zero_pad, self.x_total[idx-valid_len:idx+1, :]), dim=0)
         else:
             x60 = self.x_total[idx - SEQ_LEN + 1:idx + 1, :]
-            y60 = self.y_total[idx]
+        y60 = self.y_total[idx]   # TODO: make y as if there is any seizure point in 60 sec.
 
-        sample = {'x': x60, 'y': y60}
+        sample = {'x': x60, 'y': y60, 'idx': idx}
         return sample
 
 
 class ImbalancedDataSampler(Sampler):
-    def __init__(self, valid_seizure_indices, valid_non_seizure_indices):
-        self.seizure_indices = valid_seizure_indices
-        self.non_seizure_indices = valid_non_seizure_indices
-        self.num_seizure = len(valid_seizure_indices)
-        self.num_non_seizure = len(valid_non_seizure_indices)
+    def __init__(self, seizure_indices, non_seizure_indices, post_seizure_indices, post_non_ratio = 0.4):
+        self.seizure_indices = seizure_indices
+        self.non_seizure_indices = non_seizure_indices
+        self.post_seizure_indices = post_seizure_indices
+        self.num_seizure = len(seizure_indices)
+        self.num_non_seizure = len(non_seizure_indices)
+        self.num_post_seizure = len(post_seizure_indices)
+        self.post_seizure_chosen_len = int(post_non_ratio * self.num_seizure)
 
     def __iter__(self):
-        sampled_non_seizure_indices = torch.randperm(self.num_non_seizure)[:self.num_seizure]
+        sampled_non_seizure_indices = torch.randperm(self.num_non_seizure)[:self.num_seizure-self.post_seizure_chosen_len]
+        sampled_post_seizure_indices = torch.randperm(self.num_post_seizure)[:self.post_seizure_chosen_len]
+
         seizure_non_seizure_cat = torch.cat(
-            (self.seizure_indices, self.non_seizure_indices[sampled_non_seizure_indices]), 0)
+            (self.seizure_indices,
+             self.non_seizure_indices[sampled_non_seizure_indices],
+             self.post_seizure_indices[sampled_post_seizure_indices]), 0)
         return iter(seizure_non_seizure_cat[torch.randperm(2 * self.num_seizure)])
 
     def __len__(self):
