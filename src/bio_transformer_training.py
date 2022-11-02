@@ -11,6 +11,7 @@ import torch
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader, TensorDataset
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss
+from torch.nn.utils.rnn import pad_sequence
 from torch.optim import SGD, AdamW
 from tqdm import tqdm
 import torch.nn.functional as F
@@ -120,30 +121,28 @@ def get_data(pretrain_mode=False, dataset='TUSZ'):
 
 def train(model, device, save_path: str, learning_rate: float = 0.01):
     X, labels, valid_labels, _, sample_time = get_data(pretrain_mode=False)
-    print(valid_labels["train"])
 
     # %%
-    seizure_indices = np.where(labels['train'] == 1)[0]
-    non_seizure_indices = np.where(labels['train'] == 0)[0]
+    mode = "train"
+    seizure_indices = np.where(labels[mode] == 1)[0]
+    non_seizure_indices = np.where(labels[mode] == 0)[0]
     post_ictal_indices = []
-    seizure_end_points = np.where(np.diff(labels["train"][:, 0]).astype(np.int) == -1)[0]
-    print("post ictal ", seizure_end_points)
+    seizure_end_points = np.where(np.diff(labels[mode][:, 0]).astype(np.int) == -1)[0]
     for post_ictal in seizure_end_points:
-        for post_time in range(1, SEQ_LEN):
-            if sample_time["train"][post_ictal + post_time] == 0 or labels['train'][post_ictal + post_time] == 1:
+        for post_time in range(ROI, SEQ_LEN):
+            if post_ictal + post_time >= len(sample_time[mode]) or \
+                    sample_time[mode][post_ictal + post_time] == 0 or \
+                    labels[mode][post_ictal + post_time] == 1:
                 break
             post_ictal_indices.append(post_ictal + post_time)
-    # print("post ictal ", post_ictal_indices[:1000])
-    # print("ictal ", seizure_indices[:1000])
+
     post_ictal_indices = np.array(post_ictal_indices)
     non_seizure_indices = np.setdiff1d(non_seizure_indices, post_ictal_indices, assume_unique=True)
-    print("{} seizures, {} seizure points, {} non_seizure points and {} post ictal points "
-          .format(len(seizure_end_points),
+    print("{}: {} seizures, {} seizure points, {} non_seizure points and {} post ictal points "
+          .format(mode, len(seizure_end_points),
                   len(seizure_indices),
                   len(non_seizure_indices),
                   len(post_ictal_indices)))
-    # valid_seizures = np.intersect1d(seizure_indices.astype(np.int32), valid_labels["train"].astype(np.int32))
-    # valid_non_seizure = np.intersect1d(non_seizure_indices.astype(np.int32), valid_labels["train"].astype(np.int32))
 
     X_train = X["train"]
     X_val = X["val"]
@@ -162,14 +161,15 @@ def train(model, device, save_path: str, learning_rate: float = 0.01):
     # it = iter(train_loader)
     # for i in range(10):
     #     sample = next(it)
-    #     for j in range(16):
-    #         idx = sample['idx'][j]
-    #         if np.isin(idx, post_ictal_indices, assume_unique=True):
-    #             print(idx, "Post ictal", sample['y'][j])
-    #         elif np.isin(idx, non_seizure_indices, assume_unique=True):
-    #             print(idx, "non ictal", sample['y'][j])
-    #         else:
-    #             print(idx, "ictal", sample['y'][j])
+    #     print(sample['y'])
+        # for j in range(16):
+            # idx = sample['idx'][j]
+            # if np.isin(idx, post_ictal_indices, assume_unique=True):
+            #     print(idx, "Post ictal", sample['y'][j])
+            # elif np.isin(idx, non_seizure_indices, assume_unique=True):
+            #     print(idx, "non ictal", sample['y'][j])
+            # else:
+            #     print(idx, "ictal", sample['y'][j])
 
     val_set = Epilepsy60Dataset(torch.from_numpy(X_val).float(), torch.from_numpy(Y_val).long(),
                                 torch.from_numpy(sample_time_val).long())
@@ -180,7 +180,7 @@ def train(model, device, save_path: str, learning_rate: float = 0.01):
     optimizer = AdamW(model.parameters(), lr=learning_rate)
     criterion = CrossEntropyLoss()
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.95)
-    N_EPOCHS = 1
+    N_EPOCHS = 5
     train_loss_list = []
     val_loss_list = []
 
@@ -204,19 +204,19 @@ def train(model, device, save_path: str, learning_rate: float = 0.01):
         model.eval()
         with torch.no_grad():
             running_vloss = 0.0
-            for i, batch in enumerate(val_loader):
-                x, y = batch['x'], batch['y']
-                x, y = x.to(device), y.to(device)
-                x = torch.transpose(x, 0, 1)
-                voutputs = model(x)
-                vloss = criterion(voutputs[-1, :, :], y.view(-1, ))
-                running_vloss += vloss.detach().cpu().item()
-
-            avg_vloss = running_vloss / len(val_loader)
-            print('LOSS valid {}'.format(avg_vloss))
-            val_loss_list.append(avg_vloss)
-            if avg_vloss < np.min(np.array(val_loss_list)):
-                torch.save(model, "{}_best".format(save_path))
+            # for i, batch in enumerate(val_loader):
+            #     x, y = batch['x'], batch['y']
+            #     x, y = x.to(device), y.to(device)
+            #     x = torch.transpose(x, 0, 1)
+            #     voutputs = model(x)
+            #     vloss = criterion(voutputs[-1, :, :], y.view(-1, ))
+            #     running_vloss += vloss.detach().cpu().item()
+            #
+            # avg_vloss = running_vloss / len(val_loader)
+            # print('LOSS valid {}'.format(avg_vloss))
+            # val_loss_list.append(avg_vloss)
+            # if avg_vloss < np.min(np.array(val_loss_list)):
+            #     torch.save(model, "{}_best".format(save_path))
 
             scheduler.step()
             lr = scheduler.get_last_lr()[0]
@@ -224,10 +224,10 @@ def train(model, device, save_path: str, learning_rate: float = 0.01):
             print(f"Epoch {epoch + 1}/{N_EPOCHS} Training loss: {train_loss / len(train_loader):.2f} ")
             train_loss_list.append(train_loss / len(train_loader))
 
-            if avg_vloss <= np.min(np.array(val_loss_list)):
-                torch.save(model.state_dict(), save_path + '_best')
+            # if avg_vloss <= np.min(np.array(val_loss_list)):
+            #     torch.save(model.state_dict(), save_path + '_best')
 
-    torch.save(model, save_path)
+    torch.save(model.state_dict(), save_path)
     print("Validation_loss_list = ", val_loss_list)
     print("Train_loss_list = ", train_loss_list)
 
@@ -332,7 +332,7 @@ def train_scratch(dataset):
     d_model = 768
     n_heads = 12
     d_hid = 4 * d_model
-    seq_len = SEQ_LEN + 2
+    seq_len = SEQ_LEN + 6
     segment = SEGMENT
     n_layers = 12
     n_out = 2
@@ -341,7 +341,7 @@ def train_scratch(dataset):
     model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len,
                            n_layers=n_layers,
                            n_out=n_out, device=device, segments=segment).to(device)
-    savepath = '../output/model{}_{}'.format(SEQ_LEN, dataset)
+    savepath = '../output/model{}_{}_scratch'.format(SEQ_LEN, dataset)
     train(model, device, savepath)
 
 
