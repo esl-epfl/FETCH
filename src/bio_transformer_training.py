@@ -33,7 +33,7 @@ def get_data(pretrain_mode=False, dataset='TUSZ'):
     if dataset == "epilepsiae":
         rootdir = '../input/Epilepsiae_total' if pretrain_mode else '../input/Epilepsiae_info'
     elif dataset == "TUSZ":
-        rootdir = "../TUSZ_zc"
+        rootdir = "../input/TUSZ_zc"
     else:
         raise Exception("Dataset unknown!")
     df = pd.read_csv(rootdir + '/{}_labels.csv'.format(dataset))
@@ -44,8 +44,8 @@ def get_data(pretrain_mode=False, dataset='TUSZ'):
         df['offsets'] = df['offsets'].apply(lambda x: json.loads(x.replace('\n', ',')))
         df.apply(set_labels, axis=1)
 
-    # df = df.groupby('patient').head(1)
     df = df.sort_values(by='patient')
+    # df = df.groupby('patient').head(1)
 
     if dataset == "epilepsiae":
         test_set = [x for x in df['file_name'].tolist() if x.startswith('Patient_1_')]
@@ -119,7 +119,7 @@ def get_data(pretrain_mode=False, dataset='TUSZ'):
     return X, labels, valid_labels, pat_start_end, sample_time
 
 
-def train(model, device, save_path: str, learning_rate: float = 0.01):
+def train(model, device, save_path: str, learning_rate: float = 0.0001):
     X, labels, valid_labels, _, sample_time = get_data(pretrain_mode=False)
 
     # %%
@@ -127,17 +127,23 @@ def train(model, device, save_path: str, learning_rate: float = 0.01):
     seizure_indices = np.where(labels[mode] == 1)[0]
     non_seizure_indices = np.where(labels[mode] == 0)[0]
     post_ictal_indices = []
+    ictal_post_ictal_indices = []
     seizure_end_points = np.where(np.diff(labels[mode][:, 0]).astype(np.int) == -1)[0]
     for post_ictal in seizure_end_points:
-        for post_time in range(ROI, SEQ_LEN):
+        for post_time in range(1, SEQ_LEN):
             if post_ictal + post_time >= len(sample_time[mode]) or \
                     sample_time[mode][post_ictal + post_time] == 0 or \
                     labels[mode][post_ictal + post_time] == 1:
                 break
-            post_ictal_indices.append(post_ictal + post_time)
+            if post_time < ROI:
+                ictal_post_ictal_indices.append(post_ictal + post_time)
+            else:
+                post_ictal_indices.append(post_ictal + post_time)
 
     post_ictal_indices = np.array(post_ictal_indices)
+    ictal_post_ictal_indices = np.array(ictal_post_ictal_indices)
     non_seizure_indices = np.setdiff1d(non_seizure_indices, post_ictal_indices, assume_unique=True)
+    non_seizure_indices = np.setdiff1d(non_seizure_indices, ictal_post_ictal_indices, assume_unique=True)
     print("{}: {} seizures, {} seizure points, {} non_seizure points and {} post ictal points "
           .format(mode, len(seizure_end_points),
                   len(seizure_indices),
@@ -162,14 +168,14 @@ def train(model, device, save_path: str, learning_rate: float = 0.01):
     # for i in range(10):
     #     sample = next(it)
     #     print(sample['y'])
-        # for j in range(16):
-            # idx = sample['idx'][j]
-            # if np.isin(idx, post_ictal_indices, assume_unique=True):
-            #     print(idx, "Post ictal", sample['y'][j])
-            # elif np.isin(idx, non_seizure_indices, assume_unique=True):
-            #     print(idx, "non ictal", sample['y'][j])
-            # else:
-            #     print(idx, "ictal", sample['y'][j])
+    # for j in range(16):
+    # idx = sample['idx'][j]
+    # if np.isin(idx, post_ictal_indices, assume_unique=True):
+    #     print(idx, "Post ictal", sample['y'][j])
+    # elif np.isin(idx, non_seizure_indices, assume_unique=True):
+    #     print(idx, "non ictal", sample['y'][j])
+    # else:
+    #     print(idx, "ictal", sample['y'][j])
 
     val_set = Epilepsy60Dataset(torch.from_numpy(X_val).float(), torch.from_numpy(Y_val).long(),
                                 torch.from_numpy(sample_time_val).long())
@@ -180,14 +186,13 @@ def train(model, device, save_path: str, learning_rate: float = 0.01):
     optimizer = AdamW(model.parameters(), lr=learning_rate)
     criterion = CrossEntropyLoss()
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.95)
-    N_EPOCHS = 5
+    N_EPOCHS = 6
     train_loss_list = []
     val_loss_list = []
 
     for epoch in tqdm(range(N_EPOCHS), desc="Training"):
         model.train(True)  # turn on train mode
         train_loss = 0.0
-        class_samples = {0: 0, 1: 0}
         for i, batch in enumerate(tqdm(train_loader, desc=f"Epoch {epoch + 1}", position=0, leave=True)):
             optimizer.zero_grad()
             x, y = batch['x'], batch['y']
@@ -204,28 +209,28 @@ def train(model, device, save_path: str, learning_rate: float = 0.01):
         model.eval()
         with torch.no_grad():
             running_vloss = 0.0
-            # for i, batch in enumerate(val_loader):
-            #     x, y = batch['x'], batch['y']
-            #     x, y = x.to(device), y.to(device)
-            #     x = torch.transpose(x, 0, 1)
-            #     voutputs = model(x)
-            #     vloss = criterion(voutputs[-1, :, :], y.view(-1, ))
-            #     running_vloss += vloss.detach().cpu().item()
-            #
-            # avg_vloss = running_vloss / len(val_loader)
-            # print('LOSS valid {}'.format(avg_vloss))
-            # val_loss_list.append(avg_vloss)
-            # if avg_vloss < np.min(np.array(val_loss_list)):
-            #     torch.save(model, "{}_best".format(save_path))
+            for i, batch in enumerate(val_loader):
+                x, y = batch['x'], batch['y']
+                x, y = x.to(device), y.to(device)
+                x = torch.transpose(x, 0, 1)
+                voutputs = model(x)
+                vloss = criterion(voutputs[-1, :, :], y.view(-1, ))
+                running_vloss += vloss.detach().cpu().item()
+
+            avg_vloss = running_vloss / len(val_loader)
+            print('LOSS valid {}'.format(avg_vloss))
+            val_loss_list.append(avg_vloss)
+            if avg_vloss < np.min(np.array(val_loss_list)):
+                torch.save(model.state_dict(), "{}_best".format(save_path))
 
             scheduler.step()
             lr = scheduler.get_last_lr()[0]
+            #
+        print(f"Epoch {epoch + 1}/{N_EPOCHS} Training loss: {train_loss / len(train_loader):.2f} ")
+        train_loss_list.append(train_loss / len(train_loader))
 
-            print(f"Epoch {epoch + 1}/{N_EPOCHS} Training loss: {train_loss / len(train_loader):.2f} ")
-            train_loss_list.append(train_loss / len(train_loader))
-
-            # if avg_vloss <= np.min(np.array(val_loss_list)):
-            #     torch.save(model.state_dict(), save_path + '_best')
+        # if avg_vloss <= np.min(np.array(val_loss_list)):
+        #     torch.save(model.state_dict(), save_path + '_best')
 
     torch.save(model.state_dict(), save_path)
     print("Validation_loss_list = ", val_loss_list)
