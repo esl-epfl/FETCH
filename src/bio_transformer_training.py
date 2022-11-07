@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader, TensorDataset
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss
 from torch.nn.utils.rnn import pad_sequence
-from torch.optim import SGD, AdamW
+from torch.optim import SGD, Adam
 from tqdm import tqdm
 import torch.nn.functional as F
 from sklearn.metrics import confusion_matrix
@@ -56,7 +56,7 @@ def get_data(pretrain_mode=False, dataset='TUSZ'):
             validation_set = [x for x in df['file_name'].tolist() if x.startswith('Patient_2_')]
     else:  # dataset = TUSZ
         test_set = [x for x in df['file_name'].tolist() if x.startswith('dev')]
-        validation_set = [x for x in (df.groupby('patient').head(1))['file_name'].tolist() if
+        validation_set = [x for x in df['file_name'].tolist() if
                           ('06175' in x or '06514' in x)]
 
     training_set = [x for x in df['file_name'].tolist() if (not x in test_set) and (not x in validation_set)]
@@ -135,7 +135,7 @@ def train(model, device, save_path: str, learning_rate: float = 0.0001):
                     sample_time[mode][post_ictal + post_time] == 0 or \
                     labels[mode][post_ictal + post_time] == 1:
                 break
-            if post_time < ROI:
+            if post_time <= ROI:
                 ictal_post_ictal_indices.append(post_ictal + post_time)
             else:
                 post_ictal_indices.append(post_ictal + post_time)
@@ -161,12 +161,18 @@ def train(model, device, save_path: str, learning_rate: float = 0.0001):
                                   torch.from_numpy(sample_time_train).long())
     sampler = ImbalancedDataSampler(torch.from_numpy(seizure_indices).long(),
                                     torch.from_numpy(non_seizure_indices).long(),
-                                    torch.from_numpy(post_ictal_indices).long())
+                                    torch.from_numpy(post_ictal_indices).long(), overlap=15)
     train_loader = DataLoader(train_set, batch_size=16, sampler=sampler, num_workers=4)
 
+    # classes = {0: 0, 1: 0}
     # it = iter(train_loader)
-    # for i in range(10):
+    # for i in range(len(train_loader) - 1):
     #     sample = next(it)
+    #     for j in range(16):
+    #         classes[sample['y'][j].detach().cpu().item()] += 1
+    #
+    # print(classes)
+
     #     print(sample['y'])
     # for j in range(16):
     # idx = sample['idx'][j]
@@ -183,10 +189,10 @@ def train(model, device, save_path: str, learning_rate: float = 0.0001):
     val_loader = DataLoader(val_set, shuffle=False, batch_size=16)
 
     # Training loop
-    optimizer = AdamW(model.parameters(), lr=learning_rate)
+    optimizer = Adam(model.parameters(), lr=learning_rate)
     criterion = CrossEntropyLoss()
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.95)
-    N_EPOCHS = 6
+    N_EPOCHS = 60
     train_loss_list = []
     val_loss_list = []
 
@@ -220,7 +226,7 @@ def train(model, device, save_path: str, learning_rate: float = 0.0001):
             avg_vloss = running_vloss / len(val_loader)
             print('LOSS valid {}'.format(avg_vloss))
             val_loss_list.append(avg_vloss)
-            if avg_vloss < np.min(np.array(val_loss_list)):
+            if avg_vloss <= np.min(np.array(val_loss_list)):
                 torch.save(model.state_dict(), "{}_best".format(save_path))
 
             scheduler.step()
@@ -280,7 +286,7 @@ def pretrain(dataset):
     train_loader = DataLoader(train_set, batch_size=16, sampler=sampler, num_workers=4)
 
     # Training loop
-    optimizer = AdamW(model.parameters(), lr=1e-5)
+    optimizer = Adam(model.parameters(), lr=1e-5)
     criterion = CrossEntropyLoss()
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.95)
     N_EPOCHS = 20
@@ -334,19 +340,19 @@ def pretrain(dataset):
 
 def train_scratch(dataset):
     d_feature = 126 if dataset == "TUSZ" else 144
-    d_model = 768
-    n_heads = 12
+    d_model = 128
+    n_heads = 2
     d_hid = 4 * d_model
     seq_len = SEQ_LEN + 6
     segment = SEGMENT
-    n_layers = 12
+    n_layers = 2
     n_out = 2
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print('device : ', device)
     model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len,
                            n_layers=n_layers,
                            n_out=n_out, device=device, segments=segment).to(device)
-    savepath = '../output/model{}_{}_scratch'.format(SEQ_LEN, dataset)
+    savepath = '../output/model{}_{}_{}_scratch'.format(SEQ_LEN, n_layers, dataset)
     train(model, device, savepath)
 
 

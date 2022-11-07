@@ -75,8 +75,8 @@ dataset_parameter = {"TUSZ": {
     },
     "scratch": {
         "feature_size": 126,
-        "train_len": 2690893,
-        "val_len": 1194,
+        "train_len": 2647984,
+        "val_len": 44103,
         "test_len": 609180
     }
 },

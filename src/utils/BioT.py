@@ -100,8 +100,6 @@ class Epilepsy60Dataset(Dataset):
         return self.x_total.shape[0]
 
     def __getitem__(self, idx):
-        # if torch.is_tensor(idx):
-        #     idx = idx.tolist()
         if self.sample_time[idx] < SEQ_LEN:
             valid_len = self.sample_time[idx]
             zero_pad = torch.zeros((SEQ_LEN-valid_len-1, self.x_total.shape[1]), dtype=torch.float)
@@ -117,11 +115,11 @@ class Epilepsy60Dataset(Dataset):
 
 
 class ImbalancedDataSampler(Sampler):
-    def __init__(self, seizure_indices, non_seizure_indices, post_seizure_indices, post_non_ratio = 0.4):
-        self.seizure_indices = seizure_indices
+    def __init__(self, seizure_indices, non_seizure_indices, post_seizure_indices, post_non_ratio = 0.4, overlap:int =1):
+        self.seizure_indices = seizure_indices[::overlap]
         self.non_seizure_indices = non_seizure_indices
         self.post_seizure_indices = post_seizure_indices
-        self.num_seizure = len(seizure_indices)
+        self.num_seizure = len(self.seizure_indices)
         self.num_non_seizure = len(non_seizure_indices)
         self.num_post_seizure = len(post_seizure_indices)
         self.post_seizure_chosen_len = int(post_non_ratio * self.num_seizure)
