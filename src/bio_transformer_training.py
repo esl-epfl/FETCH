@@ -15,7 +15,7 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.optim import SGD, Adam
 from tqdm import tqdm
 import torch.nn.functional as F
-from sklearn.metrics import confusion_matrix
+from sklearn.metrics import confusion_matrix, f1_score, roc_auc_score
 from utils.BioT import SEQ_LEN, SEGMENT, ROI
 from utils.params import dataset_parameter
 
@@ -49,17 +49,20 @@ def get_data(pretrain_mode=False, dataset='TUSZ'):
 
     if dataset == "epilepsiae":
         test_set = [x for x in df['file_name'].tolist() if x.startswith('Patient_1_')]
+        excluded = []
         if pretrain_mode:
             validation_set = [x for x in (df.groupby('patient').head(1))['file_name'].tolist() if
                               (x.startswith('Patient_2_') or x.startswith('Patient_3_'))]
         else:  # pretrain mode
             validation_set = [x for x in df['file_name'].tolist() if x.startswith('Patient_2_')]
     else:  # dataset = TUSZ
-        test_set = [x for x in df['file_name'].tolist() if x.startswith('dev')]
+        test_set = [x for x in df[df['mode'] == 'testSet']['file_name'].tolist()]
         validation_set = [x for x in df['file_name'].tolist() if
                           ('06175' in x or '06514' in x)]
+        excluded = [x for x in df['file_name'].tolist() if x.startswith('dev') and (not x in test_set)]
 
-    training_set = [x for x in df['file_name'].tolist() if (not x in test_set) and (not x in validation_set)]
+    print('test Set', len(test_set))
+    training_set = [x for x in df['file_name'].tolist() if (not x in test_set) and (not x in validation_set) and  (not x in excluded)]
     df_file_name = df.set_index('file_name')
 
     pretrain_scratch_mode = "pretrain" if pretrain_mode else "scratch"
@@ -96,9 +99,10 @@ def get_data(pretrain_mode=False, dataset='TUSZ'):
                     print("Error in shape of {}: {} and {}\n".format(t_file, data.shape, y.shape))
             pat_num = t_file.split('/')[-1].split('_')[0] if dataset == "TUSZ" else int(t_file.split('_')[1]) - 1
 
-            valid_start = labels[mode].shape[0] + SEQ_LEN - 1
+            valid_start = labels[mode].shape[0] + ROI - 1 - 4
             valid_end = labels[mode].shape[0] + y.shape[0]
-            valid_labels[mode] = np.concatenate((valid_labels[mode], np.arange(start=valid_start, stop=valid_end)))
+            new_labels = np.arange(start=valid_start, stop=valid_end, step=ROI)
+            valid_labels[mode] = np.concatenate((valid_labels[mode], new_labels))
 
             sample_time[mode] = np.concatenate((sample_time[mode], np.arange(start=0, stop=y.shape[0])))
             labels[mode] = np.concatenate((labels[mode], np.expand_dims(y, axis=1)))
@@ -115,7 +119,7 @@ def get_data(pretrain_mode=False, dataset='TUSZ'):
     X["train"] = (X["train"] - mean_train) / std_train
     X["val"] = (X["val"] - mean_train) / std_train
     X["test"] = (X["test"] - mean_train) / std_train
-    print(valid_labels["train"].shape)
+    print(valid_labels["test"].shape)
     return X, labels, valid_labels, pat_start_end, sample_time
 
 
@@ -392,23 +396,42 @@ def finetune():
 
 def print_results(conf):
     print("Confusion: ", conf)
-    conf_normal = conf / np.expand_dims(conf.astype(np.float).sum(axis=1), 1)
+    conf_normal = conf
+    # conf_normal = conf / np.expand_dims(conf.astype(np.float).sum(axis=1), 1)
     sens = conf_normal[1, 1] / (conf_normal[1, 1] + conf_normal[0, 1])
-    spec = conf_normal[1, 1] / (conf_normal[1, 1] + conf_normal[1, 0])
-    print("Sensitivity: {:.2f}, Specificity: {:.2f}".format(sens, spec))
+    precision = conf_normal[1, 1] / (conf_normal[1, 1] + conf_normal[1, 0])
+    print("Sensitivity: {:.2f}, Precision: {:.2f}".format(sens, precision))
 
 
-def evaluate():
+def evaluate(dataset="TUSZ"):
+    d_feature = 126 if dataset == "TUSZ" else 144
+    d_model = 256
+    n_heads = 4
+    d_hid = 4 * d_model
+    seq_len = SEQ_LEN + 6
+    segment = SEGMENT
+    n_layers = 4
+    n_out = 2
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    X, labels, valid_labels, _ = get_data()
+    print('device : ', device)
+    model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len,
+                           n_layers=n_layers,
+                           n_out=n_out, device=device, segments=segment).to(device)
+    load_path = '../output/model{}_{}_{}_scratch_best'.format(SEQ_LEN, n_layers, dataset)
+    model.load_state_dict(torch.load(load_path))
+
+    print(model)
+
+    X, labels, valid_labels, _, sample_time = get_data(pretrain_mode=False, dataset="TUSZ")
     X_test = X["test"]
     Y = labels["test"]
+    sample_time_test = sample_time["test"]
 
-    test_set = Epilepsy60Dataset(torch.from_numpy(X_test).float(), torch.from_numpy(Y).long())
-    test_sampler = EvaluateSampler(torch.from_numpy(valid_labels['test']).int())
-    test_loader = DataLoader(test_set, batch_size=16, shuffle=False, sampler=test_sampler)
+    test_set = Epilepsy60Dataset(torch.from_numpy(X_test).float(), torch.from_numpy(Y).long(),
+                                 torch.from_numpy(sample_time_test).long())
+    test_sampler = EvaluateSampler(torch.from_numpy(valid_labels['test']).int(), overlap=1)
+    test_loader = DataLoader(test_set, batch_size=32, shuffle=False, sampler=test_sampler)
 
-    model = torch.load('../output/model{}_n12'.format(SEQ_LEN))
     model.eval()
     test_predict = []
     test_labels = []
@@ -417,11 +440,9 @@ def evaluate():
     with torch.no_grad():
         for batch in test_loader:
             x, y = batch['x'], batch['y']
-            x1, x2 = x[:, :SEGMENT, :], x[:, SEGMENT:, :]
-            x1, x2, y = x1.to(device), x2.to(device), y.to(device)
-            x1 = torch.transpose(x1, 0, 1)
-            x2 = torch.transpose(x2, 0, 1)
-            outputs = model(x1, x2)[-1, :, :]
+            x, y = x.to(device), y.to(device)
+            x = torch.transpose(x, 0, 1)
+            outputs = model(x)[-1,:,:]
             # print('output shape: {}'.format(outputs.shape))
             # the class with the highest energy is what we choose as prediction
             _, predicted = torch.max(outputs.data, 1)
@@ -436,6 +457,8 @@ def evaluate():
     # print(f'Accuracy of the network on the test data: {100 * correct // total} %')
     conf = confusion_matrix(test_labels, test_predict)
     print_results(conf)
+    print("F1 score: ", f1_score(test_labels, test_predict))
+
 
 
 def evaluate_pretraining():
@@ -549,8 +572,8 @@ def visualize_model():
 if __name__ == '__main__':
     # train()
     # pretrain("TUSZ")
-    # evaluate()
-    train_scratch(dataset="TUSZ")
+    evaluate()
+    # train_scratch(dataset="TUSZ")
     # evaluate_pretraining()
     # finetune()
     # visualize_model()
