@@ -53,16 +53,20 @@ def get_data(pretrain_mode=False, dataset='TUSZ'):
         if pretrain_mode:
             validation_set = [x for x in (df.groupby('patient').head(1))['file_name'].tolist() if
                               (x.startswith('Patient_2_') or x.startswith('Patient_3_'))]
-        else:  # pretrain mode
+        else:
             validation_set = [x for x in df['file_name'].tolist() if x.startswith('Patient_2_')]
     else:  # dataset = TUSZ
+        if pretrain_mode:
+            validation_set = [x for x in df['file_name'].tolist() if
+                              ('06175' in x or '01543' in x)]
+        else:
+            validation_set = [x for x in df[df['mode'] == 'devSet']['file_name'].tolist()]
         test_set = [x for x in df[df['mode'] == 'testSet']['file_name'].tolist()]
-        validation_set = [x for x in df['file_name'].tolist() if
-                          ('06175' in x or '06514' in x)]
         excluded = [x for x in df['file_name'].tolist() if x.startswith('dev') and (not x in test_set)]
 
     print('test Set', len(test_set))
-    training_set = [x for x in df['file_name'].tolist() if (not x in test_set) and (not x in validation_set) and  (not x in excluded)]
+    training_set = [x for x in df['file_name'].tolist() if
+                    (not x in test_set) and (not x in validation_set) and (not x in excluded)]
     df_file_name = df.set_index('file_name')
 
     pretrain_scratch_mode = "pretrain" if pretrain_mode else "scratch"
@@ -75,6 +79,8 @@ def get_data(pretrain_mode=False, dataset='TUSZ'):
          'val': np.zeros((val_len, feature_size))}
     labels = {'train': np.zeros((0, 1)), 'test': np.zeros((0, 1)), 'val': np.zeros((0, 1))}
     valid_labels = {'train': np.zeros(0, dtype=np.int), 'test': np.zeros(0, dtype=np.int),
+                    'val': np.zeros(0, dtype=np.int)}
+    minute_labels = {'train': np.zeros(0, dtype=np.int), 'test': np.zeros(0, dtype=np.int),
                     'val': np.zeros(0, dtype=np.int)}
     sample_time = {'train': np.zeros(0, dtype=np.int), 'test': np.zeros(0, dtype=np.int),
                    'val': np.zeros(0, dtype=np.int)}
@@ -99,17 +105,19 @@ def get_data(pretrain_mode=False, dataset='TUSZ'):
                     print("Error in shape of {}: {} and {}\n".format(t_file, data.shape, y.shape))
             pat_num = t_file.split('/')[-1].split('_')[0] if dataset == "TUSZ" else int(t_file.split('_')[1]) - 1
 
-            valid_start = labels[mode].shape[0] + ROI - 1 - 4
+            valid_start = labels[mode].shape[0] + ROI - 1
+            if mode == 'test': valid_start = valid_start - 4
             valid_end = labels[mode].shape[0] + y.shape[0]
-            new_labels = np.arange(start=valid_start, stop=valid_end, step=ROI)
-            valid_labels[mode] = np.concatenate((valid_labels[mode], new_labels))
+            minute_labels[mode] = np.concatenate((minute_labels[mode], np.arange(start=valid_start, stop=valid_end, step=ROI)))
+            valid_labels[mode] = np.concatenate((valid_labels[mode], np.arange(start=valid_start, stop=valid_end)))
+
+            if pat_num not in pat_start_end[mode]:
+                pat_start_end[mode][pat_num] = []
+            pat_start_end[mode][pat_num].append((labels[mode].shape[0], labels[mode].shape[0] + y.shape[0]))
 
             sample_time[mode] = np.concatenate((sample_time[mode], np.arange(start=0, stop=y.shape[0])))
             labels[mode] = np.concatenate((labels[mode], np.expand_dims(y, axis=1)))
 
-            if pat_num not in pat_start_end[mode]:
-                pat_start_end[mode][pat_num] = []
-            pat_start_end[mode][pat_num].append((valid_start, valid_end))
         print("total_len ", mode, total_len)
     print(X["train"].shape)
     print(X["val"].shape)
@@ -120,10 +128,10 @@ def get_data(pretrain_mode=False, dataset='TUSZ'):
     X["val"] = (X["val"] - mean_train) / std_train
     X["test"] = (X["test"] - mean_train) / std_train
     print(valid_labels["test"].shape)
-    return X, labels, valid_labels, pat_start_end, sample_time
+    return X, labels, minute_labels, pat_start_end, sample_time, valid_labels
 
 
-def train(model, device, save_path: str, learning_rate: float = 0.0001):
+def train(model, device, save_path: str, learning_rate: float = 1e-5):
     X, labels, valid_labels, _, sample_time = get_data(pretrain_mode=False)
 
     # %%
@@ -165,17 +173,10 @@ def train(model, device, save_path: str, learning_rate: float = 0.0001):
                                   torch.from_numpy(sample_time_train).long())
     sampler = ImbalancedDataSampler(torch.from_numpy(seizure_indices).long(),
                                     torch.from_numpy(non_seizure_indices).long(),
-                                    torch.from_numpy(post_ictal_indices).long(), overlap=15)
+                                    torch.from_numpy(post_ictal_indices).long(), overlap=10)
     train_loader = DataLoader(train_set, batch_size=16, sampler=sampler, num_workers=4)
 
     # classes = {0: 0, 1: 0}
-    # it = iter(train_loader)
-    # for i in range(len(train_loader) - 1):
-    #     sample = next(it)
-    #     for j in range(16):
-    #         classes[sample['y'][j].detach().cpu().item()] += 1
-    #
-    # print(classes)
 
     #     print(sample['y'])
     # for j in range(16):
@@ -189,14 +190,14 @@ def train(model, device, save_path: str, learning_rate: float = 0.0001):
 
     val_set = Epilepsy60Dataset(torch.from_numpy(X_val).float(), torch.from_numpy(Y_val).long(),
                                 torch.from_numpy(sample_time_val).long())
-    # val_sampler = EvaluateSampler(torch.from_numpy(valid_labels['val']).int())
-    val_loader = DataLoader(val_set, shuffle=False, batch_size=16)
+    val_sampler = EvaluateSampler(torch.from_numpy(valid_labels['val']).int(), overlap=1)
+    val_loader = DataLoader(val_set, shuffle=False, batch_size=16, sampler=val_sampler)
 
     # Training loop
     optimizer = Adam(model.parameters(), lr=learning_rate)
     criterion = CrossEntropyLoss()
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.95)
-    N_EPOCHS = 60
+    N_EPOCHS = 120
     train_loss_list = []
     val_loss_list = []
 
@@ -258,15 +259,15 @@ def get_pat_start_end(pat_file_start_end):
 
 
 def pretrain(dataset):
-    X, labels, valid_labels, pat_file_start_end = get_data(pretrain_mode=True, dataset=dataset)
+    X, labels, minute_labels, pat_file_start_end, sample_time, valid_labels = get_data(pretrain_mode=True, dataset=dataset)
     print(pat_file_start_end)
     d_feature = 126 if dataset == "TUSZ" else 144
-    d_model = 768
-    n_heads = 12
+    d_model = 256
+    n_heads = 4
     d_hid = 4 * d_model
-    seq_len = SEQ_LEN + 6
+    seq_len = SEQ_LEN + 7
     segment = SEGMENT
-    n_layers = 12
+    n_layers = 4
     n_out = 2
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print('device : ', device)
@@ -281,19 +282,33 @@ def pretrain(dataset):
 
     print("Pat Start End: ", pat_start_end)
 
+    train_set = PatientDiscriminatorDataset(torch.from_numpy(X_train).float(), pat_start_end['train'], sample_time['train'])
+    sampler = EvaluateSampler(torch.from_numpy(valid_labels['train']).int(), overlap=10)
+    train_loader = DataLoader(train_set, batch_size=64, sampler=sampler, num_workers=4)
+
     validation_set = PatientDiscriminatorEvaluationDataset(torch.from_numpy(X["val"]).float(), pat_start_end['val'],
-                                                           torch.from_numpy(valid_labels['val']).int())
-    validation_loader = DataLoader(validation_set, batch_size=16, num_workers=4)
+                                                           torch.from_numpy(minute_labels['val']).int(),
+                                                           sample_time['val'])
+    validation_loader = DataLoader(validation_set, batch_size=16, num_workers=4, shuffle=True)
 
-    train_set = PatientDiscriminatorDataset(torch.from_numpy(X_train).float(), pat_start_end['train'])
-    sampler = EvaluateSampler(torch.from_numpy(valid_labels['train']).int(), overlap=60)
-    train_loader = DataLoader(train_set, batch_size=16, sampler=sampler, num_workers=4)
-
+    # it = iter(train_loader)
+    # class_len = {0: 0, 1: 0}
+    # for i in range(5):
+    #     sample = next(it)
+    #     for j in range(16):
+    #         class_len[sample['y'][j].detach().cpu().item()] += 1
+    #         plt.figure(figsize=(6, 6))
+    #         sns.heatmap(sample['x'][j].cpu().numpy().transpose(), cmap="magma_r")
+    #         plt.title("{}, LEN : {}".format(sample['y'][j].detach().cpu().item(), sample['len'][j].detach().cpu().item() ))
+    #         plt.savefig('../output/{}.png'.format(i*16+j))
+    #         plt.close()
+    # print(class_len)
+    # exit()
     # Training loop
     optimizer = Adam(model.parameters(), lr=1e-5)
     criterion = CrossEntropyLoss()
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.95)
-    N_EPOCHS = 20
+    N_EPOCHS = 120
     val_loss_list = []
     for epoch in tqdm(range(N_EPOCHS), desc="Training"):
         model.train(True)  # turn on train mode
@@ -301,15 +316,10 @@ def pretrain(dataset):
         for i, batch in enumerate(tqdm(train_loader, desc=f"Epoch {epoch + 1}", position=0, leave=True)):
             optimizer.zero_grad()
             x, y = batch['x'], batch['y']
-            # print(np.min(np.sum(np.abs((X_train-x1[0,0].numpy())), axis=1)))
-            # x1_index = np.argwhere(np.all(np.abs(X_train-x1[0,0].numpy())<1e-6, axis=1))[0,0]
-            # x2_index = np.argwhere(np.all(np.abs(X_train-x2[0,0].numpy())<1e-6, axis=1))[0,0]
-            # print(x1_index, x2_index, y.numpy()[0])
             x, y = x.to(device), y.to(device)
             x = torch.transpose(x, 0, 1)
             y_hat = model(x)
             loss = criterion(y_hat[-1, :, :], y.view(-1, ))
-
             train_loss += loss.detach().cpu().item()
 
             loss.backward()
@@ -338,18 +348,18 @@ def pretrain(dataset):
 
         print(f"Epoch {epoch + 1}/{N_EPOCHS} Training loss: {train_loss / len(train_loader):.2f} ")
 
-    torch.save(model.state_dict(), '../output/pre_model{}_n{}_2'.format(SEQ_LEN, n_layers))
+    torch.save(model.state_dict(), '../output/pre_model{}_n{}_{}'.format(SEQ_LEN, n_layers, dataset))
     # torch.save(model.state_dict(), '../output/pre_model{}_state_n{}'.format(SEQ_LEN, n_layers))
 
 
 def train_scratch(dataset):
     d_feature = 126 if dataset == "TUSZ" else 144
-    d_model = 128
-    n_heads = 2
+    d_model = 256
+    n_heads = 4
     d_hid = 4 * d_model
-    seq_len = SEQ_LEN + 6
+    seq_len = SEQ_LEN + 7
     segment = SEGMENT
-    n_layers = 2
+    n_layers = 4
     n_out = 2
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print('device : ', device)
@@ -442,7 +452,7 @@ def evaluate(dataset="TUSZ"):
             x, y = batch['x'], batch['y']
             x, y = x.to(device), y.to(device)
             x = torch.transpose(x, 0, 1)
-            outputs = model(x)[-1,:,:]
+            outputs = model(x)[-1, :, :]
             # print('output shape: {}'.format(outputs.shape))
             # the class with the highest energy is what we choose as prediction
             _, predicted = torch.max(outputs.data, 1)
@@ -458,7 +468,6 @@ def evaluate(dataset="TUSZ"):
     conf = confusion_matrix(test_labels, test_predict)
     print_results(conf)
     print("F1 score: ", f1_score(test_labels, test_predict))
-
 
 
 def evaluate_pretraining():
@@ -571,8 +580,8 @@ def visualize_model():
 
 if __name__ == '__main__':
     # train()
-    # pretrain("TUSZ")
-    evaluate()
+    pretrain("TUSZ")
+    # evaluate()
     # train_scratch(dataset="TUSZ")
     # evaluate_pretraining()
     # finetune()

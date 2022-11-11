@@ -25,7 +25,7 @@ class BioTransformer(nn.Module):
         self.device = device
         self.seq_len = seq_len
 
-        self.roi_length = torch.tensor([90, 75, 60, 45, 30, 0])
+        self.roi_length = torch.tensor([60, 50, 40, 30, 20, 10, 0])
         encoder_layers = TransformerEncoderLayer(d_model, n_heads, d_hid)
         self.transformer_encoder = TransformerEncoder(encoder_layers, n_layers)
         self.encoder = nn.Linear(d_feature, d_model)
@@ -61,7 +61,6 @@ class BioTransformer(nn.Module):
 
 
 class PositionalEncoding(nn.Module):
-
 
     def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000, segment_length: Tensor = 0):
         super().__init__()
@@ -153,21 +152,20 @@ class EvaluateSampler(Sampler):
 
 
 class PatientDiscriminatorDataset(Dataset):
-    def __init__(self, x_total, pat_start_end):
+    def __init__(self, x_total, pat_start_end, sample_time):
         self.x_total = x_total
         self.pat_start_end = pat_start_end
         self.pat_start = [x[0] for x in pat_start_end]
         self.pats = len(pat_start_end)
-        self.roi_length = torch.tensor([30, 45, 60, 75, 90])
-        self.probability_length = torch.tensor([0.2, 0.2, 0.2, 0.2, 0.2])
+        self.roi_length = torch.tensor([10, 20, 30, 40, 50, 60])
+        self.sample_time = sample_time
 
     def __len__(self):
         return self.x_total.shape[0]
 
     def __getitem__(self, idx):
-        # roi_random = torch.clamp(torch.normal(ROI, 0.5, size=(1,))[0].int(), 0, SEGMENT)
-        random_index = torch.multinomial(self.probability_length, num_samples=1, replacement=True)
-        roi_random = self.roi_length[random_index][0]
+        random_index = torch.randint(low=0, high=5, size=(1,))
+        roi_random = self.roi_length[random_index]
         seg_random = SEQ_LEN - roi_random
         x_later = self.x_total[idx - roi_random:idx, :]
         pat_num = bisect(self.pat_start, idx) - 1
@@ -179,21 +177,29 @@ class PatientDiscriminatorDataset(Dataset):
             label = 0
             pat_sample = pat_num
 
-        idx_sample = torch.randint(low=max(self.pat_start_end[pat_sample][0], seg_random),
+        idx_sample = torch.randint(low=self.pat_start_end[pat_sample][0],
                                    high=self.pat_start_end[pat_sample][1],
                                    size=(1,))
-        x_prior = self.x_total[idx_sample - seg_random:idx_sample, :]
+        #
+        valid_len = self.sample_time[idx_sample]
+        if valid_len < seg_random:
+            zero_pad = torch.zeros((seg_random-valid_len-1, self.x_total.shape[1]), dtype=torch.float)
+            x_prior = torch.cat((zero_pad, self.x_total[idx_sample-valid_len:idx_sample+1, :]), dim=0)
+
+        else:
+            x_prior = self.x_total[idx_sample - seg_random:idx_sample, :]
         x = torch.cat((x_prior, x_later), dim=0)
-        sample = {'x': x, 'y': label, 'len': roi_random}
+        sample = {'x': x, 'y': label, 'len': roi_random, 'valid_len': valid_len}
         return sample
 
 
 class PatientDiscriminatorEvaluationDataset(Dataset):
-    def __init__(self, x_total, pat_start_end, valid_indices):
+    def __init__(self, x_total, pat_start_end, valid_indices, sample_time):
         self.x_total = x_total
         self.pat_start_end = pat_start_end
         self.pat_start = [x[0] for x in pat_start_end]
-        self.valid_minutes_indices = valid_indices[::60]
+        self.valid_minutes_indices = valid_indices
+        self.sample_time = sample_time
 
     def __len__(self):
         return self.valid_minutes_indices.shape[0] ** 2
@@ -201,11 +207,16 @@ class PatientDiscriminatorEvaluationDataset(Dataset):
     def __getitem__(self, idx):
         idx_later = self.valid_minutes_indices[idx // self.valid_minutes_indices.shape[0]]
         idx_prior = self.valid_minutes_indices[idx % self.valid_minutes_indices.shape[0]]
-        x_later = self.x_total[idx_later - ROI:idx_later, :]
-        x_prior = self.x_total[idx_prior - SEGMENT:idx_prior, :]
+        x_later = self.x_total[idx_later - ROI+1:idx_later+1, :]
+        valid_len = self.sample_time[idx_prior]
+        if valid_len < SEGMENT:
+            zero_pad = torch.zeros((SEGMENT-valid_len-1, self.x_total.shape[1]), dtype=torch.float)
+            x_prior = torch.cat((zero_pad, self.x_total[idx_prior-valid_len:idx_prior+1, :]), dim=0)
+        else:
+            x_prior = self.x_total[idx_prior - SEGMENT:idx_prior, :]
         pat_num_later = bisect(self.pat_start, idx_later) - 1
         pat_num_prior = bisect(self.pat_start, idx_prior) - 1
-        label = 0 if pat_num_prior==pat_num_later else 1
+        label = 0 if pat_num_prior == pat_num_later else 1
         x = torch.cat((x_prior, x_later), dim=0)
         sample = {'x': x, 'y': label}
         return sample
