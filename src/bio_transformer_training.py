@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader, TensorDataset
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss
 from torch.nn.utils.rnn import pad_sequence
-from torch.optim import SGD, Adam
+from torch.optim import SGD, Adam, AdamW
 from tqdm import tqdm
 import torch.nn.functional as F
 from sklearn.metrics import confusion_matrix, f1_score, roc_auc_score
@@ -268,7 +268,7 @@ def pretrain(dataset):
     seq_len = SEQ_LEN + 7
     segment = SEGMENT
     n_layers = 4
-    n_out = 2
+    n_out = 1
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print('device : ', device)
     model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len,
@@ -283,8 +283,8 @@ def pretrain(dataset):
     print("Pat Start End: ", pat_start_end)
 
     train_set = PatientDiscriminatorDataset(torch.from_numpy(X_train).float(), pat_start_end['train'], sample_time['train'])
-    sampler = EvaluateSampler(torch.from_numpy(valid_labels['train']).int(), overlap=10)
-    train_loader = DataLoader(train_set, batch_size=64, sampler=sampler, num_workers=4)
+    sampler = EvaluateSampler(torch.from_numpy(valid_labels['train']).int(), overlap=20)
+    train_loader = DataLoader(train_set, batch_size=128, sampler=sampler)
 
     validation_set = PatientDiscriminatorEvaluationDataset(torch.from_numpy(X["val"]).float(), pat_start_end['val'],
                                                            torch.from_numpy(minute_labels['val']).int(),
@@ -292,23 +292,20 @@ def pretrain(dataset):
     validation_loader = DataLoader(validation_set, batch_size=16, num_workers=4, shuffle=True)
 
     # it = iter(train_loader)
-    # class_len = {0: 0, 1: 0}
     # for i in range(5):
     #     sample = next(it)
     #     for j in range(16):
-    #         class_len[sample['y'][j].detach().cpu().item()] += 1
     #         plt.figure(figsize=(6, 6))
     #         sns.heatmap(sample['x'][j].cpu().numpy().transpose(), cmap="magma_r")
     #         plt.title("{}, LEN : {}".format(sample['y'][j].detach().cpu().item(), sample['len'][j].detach().cpu().item() ))
     #         plt.savefig('../output/{}.png'.format(i*16+j))
     #         plt.close()
-    # print(class_len)
-    # exit()
+
     # Training loop
-    optimizer = Adam(model.parameters(), lr=1e-5)
-    criterion = CrossEntropyLoss()
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.95)
-    N_EPOCHS = 120
+    optimizer = SGD(model.parameters(), lr=0.01, momentum=0.9, weight_decay=1e-3)
+    criterion = BCEWithLogitsLoss()
+    # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.95)
+    N_EPOCHS = 10
     val_loss_list = []
     for epoch in tqdm(range(N_EPOCHS), desc="Training"):
         model.train(True)  # turn on train mode
@@ -319,7 +316,7 @@ def pretrain(dataset):
             x, y = x.to(device), y.to(device)
             x = torch.transpose(x, 0, 1)
             y_hat = model(x)
-            loss = criterion(y_hat[-1, :, :], y.view(-1, ))
+            loss = criterion(y_hat[-1, :, 0], y.view(-1, ))
             train_loss += loss.detach().cpu().item()
 
             loss.backward()
@@ -337,19 +334,12 @@ def pretrain(dataset):
                 vloss = criterion(voutputs[-1, :, :], y.view(-1, ))
                 running_vloss += vloss.detach().cpu().item()
 
-            avg_vloss = running_vloss / len(validation_loader)
-            print('LOSS valid {}'.format(avg_vloss))
-            val_loss_list.append(avg_vloss)
-            if avg_vloss <= np.min(np.array(val_loss_list)):
-                torch.save(model.state_dict(), '../output/pre_model{}_n{}_best'.format(SEQ_LEN, n_layers))
-
-        scheduler.step()
-        lr = scheduler.get_last_lr()[0]
+        # scheduler.step()
+        # lr = scheduler.get_last_lr()[0]
 
         print(f"Epoch {epoch + 1}/{N_EPOCHS} Training loss: {train_loss / len(train_loader):.2f} ")
 
-    torch.save(model.state_dict(), '../output/pre_model{}_n{}_{}'.format(SEQ_LEN, n_layers, dataset))
-    # torch.save(model.state_dict(), '../output/pre_model{}_state_n{}'.format(SEQ_LEN, n_layers))
+    torch.save(model.state_dict(), '../output/copy_model{}_n{}_{}'.format(SEQ_LEN, n_layers, dataset))
 
 
 def train_scratch(dataset):

@@ -158,23 +158,24 @@ class PatientDiscriminatorDataset(Dataset):
         self.pat_start = [x[0] for x in pat_start_end]
         self.pats = len(pat_start_end)
         self.roi_length = torch.tensor([10, 20, 30, 40, 50, 60])
+        self.roi_possible_len = len(self.roi_length)
         self.sample_time = sample_time
 
     def __len__(self):
         return self.x_total.shape[0]
 
     def __getitem__(self, idx):
-        random_index = torch.randint(low=0, high=5, size=(1,))
+        random_index = torch.randint(low=0, high=self.roi_possible_len, size=(1,))
         roi_random = self.roi_length[random_index]
         seg_random = SEQ_LEN - roi_random
-        x_later = self.x_total[idx - roi_random:idx, :]
+        x_later = self.x_total[idx - roi_random+1:idx+1, :]
         pat_num = bisect(self.pat_start, idx) - 1
         if np.random.uniform(0, 1) > 0.5:
-            label = 1
+            label = 1.0
             other_pats = np.delete(np.arange(0, self.pats), pat_num)
             pat_sample = np.random.choice(other_pats)
         else:
-            label = 0
+            label = 0.0
             pat_sample = pat_num
 
         idx_sample = torch.randint(low=self.pat_start_end[pat_sample][0],
@@ -216,7 +217,7 @@ class PatientDiscriminatorEvaluationDataset(Dataset):
             x_prior = self.x_total[idx_prior - SEGMENT:idx_prior, :]
         pat_num_later = bisect(self.pat_start, idx_later) - 1
         pat_num_prior = bisect(self.pat_start, idx_prior) - 1
-        label = 0 if pat_num_prior == pat_num_later else 1
+        label = 0.0 if pat_num_prior == pat_num_later else 1.0
         x = torch.cat((x_prior, x_later), dim=0)
         sample = {'x': x, 'y': label}
         return sample
