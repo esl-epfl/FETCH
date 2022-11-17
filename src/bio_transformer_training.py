@@ -132,7 +132,7 @@ def get_data(pretrain_mode=False, dataset='TUSZ'):
 
 
 def train(model, device, save_path: str, learning_rate: float = 1e-5):
-    X, labels, valid_labels, _, sample_time = get_data(pretrain_mode=False)
+    X, labels, valid_labels, _, sample_time, _ = get_data(pretrain_mode=False, dataset='TUSZ')
 
     # %%
     mode = "train"
@@ -169,12 +169,12 @@ def train(model, device, save_path: str, learning_rate: float = 1e-5):
     sample_time_train = sample_time["train"]
     sample_time_val = sample_time["val"]
 
-    train_set = Epilepsy60Dataset(torch.from_numpy(X_train).float(), torch.from_numpy(Y).long(),
+    train_set = Epilepsy60Dataset(torch.from_numpy(X_train).float(), torch.from_numpy(Y).float(),
                                   torch.from_numpy(sample_time_train).long())
     sampler = ImbalancedDataSampler(torch.from_numpy(seizure_indices).long(),
                                     torch.from_numpy(non_seizure_indices).long(),
                                     torch.from_numpy(post_ictal_indices).long(), overlap=10)
-    train_loader = DataLoader(train_set, batch_size=16, sampler=sampler, num_workers=4)
+    train_loader = DataLoader(train_set, batch_size=64, sampler=sampler, num_workers=4)
 
     # classes = {0: 0, 1: 0}
 
@@ -188,16 +188,16 @@ def train(model, device, save_path: str, learning_rate: float = 1e-5):
     # else:
     #     print(idx, "ictal", sample['y'][j])
 
-    val_set = Epilepsy60Dataset(torch.from_numpy(X_val).float(), torch.from_numpy(Y_val).long(),
+    val_set = Epilepsy60Dataset(torch.from_numpy(X_val).float(), torch.from_numpy(Y_val).float(),
                                 torch.from_numpy(sample_time_val).long())
     val_sampler = EvaluateSampler(torch.from_numpy(valid_labels['val']).int(), overlap=1)
     val_loader = DataLoader(val_set, shuffle=False, batch_size=16, sampler=val_sampler)
 
     # Training loop
-    optimizer = Adam(model.parameters(), lr=learning_rate)
-    criterion = CrossEntropyLoss()
+    optimizer = SGD(model.parameters(), lr=learning_rate)
+    criterion = BCEWithLogitsLoss()
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.95)
-    N_EPOCHS = 120
+    N_EPOCHS = 20
     train_loss_list = []
     val_loss_list = []
 
@@ -210,7 +210,7 @@ def train(model, device, save_path: str, learning_rate: float = 1e-5):
             x, y = x.to(device), y.to(device)
             x = torch.transpose(x, 0, 1)
             y_hat = model(x)
-            loss = criterion(y_hat[-1, :, :], y.view(-1, ))
+            loss = criterion(y_hat[-1, :, 0], y.view(-1, ))
 
             train_loss += loss.detach().cpu().item()
 
@@ -225,7 +225,7 @@ def train(model, device, save_path: str, learning_rate: float = 1e-5):
                 x, y = x.to(device), y.to(device)
                 x = torch.transpose(x, 0, 1)
                 voutputs = model(x)
-                vloss = criterion(voutputs[-1, :, :], y.view(-1, ))
+                vloss = criterion(voutputs[-1, :, 0], y.view(-1, ))
                 running_vloss += vloss.detach().cpu().item()
 
             avg_vloss = running_vloss / len(val_loader)
@@ -240,8 +240,6 @@ def train(model, device, save_path: str, learning_rate: float = 1e-5):
         print(f"Epoch {epoch + 1}/{N_EPOCHS} Training loss: {train_loss / len(train_loader):.2f} ")
         train_loss_list.append(train_loss / len(train_loader))
 
-        # if avg_vloss <= np.min(np.array(val_loss_list)):
-        #     torch.save(model.state_dict(), save_path + '_best')
 
     torch.save(model.state_dict(), save_path)
     print("Validation_loss_list = ", val_loss_list)
@@ -262,19 +260,19 @@ def pretrain(dataset):
     X, labels, minute_labels, pat_file_start_end, sample_time, valid_labels = get_data(pretrain_mode=True, dataset=dataset)
     print(pat_file_start_end)
     d_feature = 126 if dataset == "TUSZ" else 144
-    d_model = 256
-    n_heads = 4
+    d_model = 768
+    n_heads = 12
     d_hid = 4 * d_model
-    seq_len = SEQ_LEN + 7
+    seq_len = SEQ_LEN + 2
     segment = SEGMENT
-    n_layers = 4
+    n_layers = 12
     n_out = 1
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print('device : ', device)
     model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len,
                            n_layers=n_layers,
                            n_out=n_out, device=device, segments=segment).to(device)
-    # model.load_state_dict(torch.load("../output/pre_model300_n12_2"))
+    # model.load_state_dict(torch.load("../output/fake_model{}_n{}_{}".format(SEQ_LEN, n_layers, dataset)))
 
     X_train = X["train"]
 
@@ -305,7 +303,7 @@ def pretrain(dataset):
     optimizer = SGD(model.parameters(), lr=0.01, momentum=0.9, weight_decay=1e-3)
     criterion = BCEWithLogitsLoss()
     # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.95)
-    N_EPOCHS = 10
+    N_EPOCHS = 6
     val_loss_list = []
     for epoch in tqdm(range(N_EPOCHS), desc="Training"):
         model.train(True)  # turn on train mode
@@ -323,23 +321,23 @@ def pretrain(dataset):
             # torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
             optimizer.step()
 
-        model.eval()
-        with torch.no_grad():
-            running_vloss = 0.0
-            for i, batch in enumerate(validation_loader):
-                x, y = batch['x'], batch['y']
-                x, y = x.to(device), y.to(device)
-                x = torch.transpose(x, 0, 1)
-                voutputs = model(x)
-                vloss = criterion(voutputs[-1, :, :], y.view(-1, ))
-                running_vloss += vloss.detach().cpu().item()
+        # model.eval()
+        # with torch.no_grad():
+        #     running_vloss = 0.0
+        #     for i, batch in enumerate(validation_loader):
+        #         x, y = batch['x'], batch['y']
+        #         x, y = x.to(device), y.to(device)
+        #         x = torch.transpose(x, 0, 1)
+        #         voutputs = model(x)
+        #         vloss = criterion(voutputs[-1, :, 0], y.view(-1, ))
+        #         running_vloss += vloss.detach().cpu().item()
 
         # scheduler.step()
         # lr = scheduler.get_last_lr()[0]
 
         print(f"Epoch {epoch + 1}/{N_EPOCHS} Training loss: {train_loss / len(train_loader):.2f} ")
 
-    torch.save(model.state_dict(), '../output/copy_model{}_n{}_{}'.format(SEQ_LEN, n_layers, dataset))
+    torch.save(model.state_dict(), '../output/fake60_model{}_n{}_{}'.format(SEQ_LEN, n_layers, dataset))
 
 
 def train_scratch(dataset):
@@ -364,26 +362,28 @@ def finetune():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print('device : ', device)
 
-    d_feature = 144
-    d_model = 768
-    n_heads = 12
+    d_feature = 126 #144
+    d_model = 256
+    n_heads = 4
     d_hid = 4 * d_model
-    seq_len = SEQ_LEN + 6
+    seq_len = SEQ_LEN + 7
     segment = SEGMENT
-    n_layers = 12
-    n_out = 2
+    n_layers = 4
+    n_out = 1
 
     model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len,
                            n_layers=n_layers,
                            n_out=n_out, device=device, segments=segment).to(device)
-    model.load_state_dict(torch.load("../output/pre_model300_n12_2"))
+    model.load_state_dict(torch.load("../output/pretrain_model300_n4_TUSZ"))
 
-    savepath = '../output/finetuned_model{}_n12'.format(SEQ_LEN)
+    savepath = '../output/finetuned_model{}_n{}'.format(SEQ_LEN, n_layers)
     model.decoder.weight.data.uniform_(-0.1, 0.1)
     model.decoder.bias.data.uniform_(-0.1, 0.1)
     # model.sep_token.requires_grad = False
-    # model.class_token.requires_grad = False
-    # for layer_num in range(12):
+    # model.cls_token.requires_grad = False
+    # model.encoder.weight.requires_grad = False
+    # model.encoder.bias.requires_grad = False
+    # for layer_num in range(n_layers):
     #     for param in model.transformer_encoder.layers[layer_num].parameters():
     #         param.requires_grad = False
 
@@ -391,7 +391,7 @@ def finetune():
         if param.requires_grad:
             print(
                 name, param.data.shape)
-    train(model, device, savepath, learning_rate=1e-5)
+    train(model, device, savepath, learning_rate=1e-4)
 
 
 def print_results(conf):
@@ -408,21 +408,21 @@ def evaluate(dataset="TUSZ"):
     d_model = 256
     n_heads = 4
     d_hid = 4 * d_model
-    seq_len = SEQ_LEN + 6
+    seq_len = SEQ_LEN + 7
     segment = SEGMENT
     n_layers = 4
-    n_out = 2
+    n_out = 1
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print('device : ', device)
     model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len,
                            n_layers=n_layers,
                            n_out=n_out, device=device, segments=segment).to(device)
-    load_path = '../output/model{}_{}_{}_scratch_best'.format(SEQ_LEN, n_layers, dataset)
+    load_path = '../output/pretrain_model{}_n{}_{}'.format(SEQ_LEN, n_layers, dataset)
     model.load_state_dict(torch.load(load_path))
 
     print(model)
 
-    X, labels, valid_labels, _, sample_time = get_data(pretrain_mode=False, dataset="TUSZ")
+    X, labels, valid_labels, _, sample_time, _ = get_data(pretrain_mode=False, dataset="TUSZ")
     X_test = X["test"]
     Y = labels["test"]
     sample_time_test = sample_time["test"]
@@ -460,65 +460,154 @@ def evaluate(dataset="TUSZ"):
     print("F1 score: ", f1_score(test_labels, test_predict))
 
 
-def evaluate_pretraining():
-    # activation = {}
-    #
-    # def get_activation(name):
-    #     def hook(model, input, output):
-    #         activation[name] = output.detach()
-    #
-    #     return hook
+def evaluate_pretraining(dataset='TUSZ'):
+    activation = {}
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print('device: ', device)
-    X, labels, valid_labels, pat_file_start_end = get_data(pretrain_mode=False, dataset="epilepsiae")
+    def get_activation(name):
+        def hook(model, input, output):
+            activation[name] = output.detach()
+
+        return hook
+
+    d_feature = 126 if dataset == "TUSZ" else 144
+    d_model = 256
+    n_heads = 4
+    d_hid = 4 * d_model
+    seq_len = SEQ_LEN + 2
+    segment = SEGMENT
+    n_layers = 4
+    n_out = 1
+    torch.random.manual_seed(42)
+    # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device  = torch.device('cpu')
+    print('device : ', device)
+    model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len,
+                           n_layers=n_layers,
+                           n_out=n_out, device=device, segments=segment).to(device)
+
+    X, labels, minute_labels, pat_file_start_end, sample_time, valid_labels = get_data(pretrain_mode=True, dataset=dataset)
     X_train = X["train"]
 
     pat_start_end = get_pat_start_end(pat_file_start_end)
 
-    validation_set = PatientDiscriminatorEvaluationDataset(torch.from_numpy(X["val"]).float(), pat_start_end['val'],
-                                                           torch.from_numpy(valid_labels['val']).int())
-    validation_loader = DataLoader(validation_set, batch_size=16, num_workers=4)
+    train_set = PatientDiscriminatorDataset(torch.from_numpy(X_train).float(), pat_start_end['train'],
+                                            sample_time['train'])
+    sampler = EvaluateSampler(torch.from_numpy(valid_labels['train']).int(), overlap=60)
+    train_loader = DataLoader(train_set, batch_size=1, sampler=sampler)
+    model.load_state_dict(torch.load('../output/fake60_model{}_n{}_{}'.format(SEQ_LEN, n_layers, dataset)))
 
-    model = torch.load('../output/pre_model{}_n12'.format(SEQ_LEN))
+
+
+    # load_path = '../output/model{}_{}_{}_scratch_best'.format(SEQ_LEN, n_layers, dataset)
+    # model.load_state_dict(torch.load(load_path))
+    #
+    # X, labels, valid_labels, _, sample_time, _ = get_data(pretrain_mode=False, dataset="TUSZ")
+    # X_test = X["test"]
+    # Y = labels["test"]
+    # sample_time_test = sample_time["test"]
+    #
+    # test_set = Epilepsy60Dataset(torch.from_numpy(X_test).float(), torch.from_numpy(Y).long(),
+    #                              torch.from_numpy(sample_time_test).long())
+    # test_sampler = EvaluateSampler(torch.from_numpy(valid_labels['test']).int(), overlap=1)
+    # test_loader = DataLoader(test_set, batch_size=1, shuffle=False, sampler=test_sampler)
+
     print(model)
-    # model.encoder.register_forward_hook(get_activation('encoder'))
-    # model.pos_encoder.register_forward_hook(get_activation('pos_encoder'))
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            print(name, param.data.shape)
+
+
+    hook1 = model.pos_encoder.register_forward_hook(get_activation('layer0_in'))
+    for i in range(1, n_layers):
+        model.transformer_encoder.layers[i-1].register_forward_hook(get_activation('layer{}_in'.format(i)))
+
+    it = iter(train_loader)
+    for iteration in range(10):
+        batch = next(it)
+        x, y = batch['x'], batch['y']
+        x, y = x.to(device), y.to(device)
+        x = torch.transpose(x, 0, 1)
+        outputs = model(x)[-1, :, :]
+        plt.subplots(2,1,figsize=(6, 12))
+        plt.subplot(211)
+        plt.title("{}, {}".format(y.detach().item(), batch['len'].detach()))
+        sns.heatmap(activation['layer0_in'].squeeze().numpy().transpose(), cmap="magma_r")
+        plt.subplot(212)
+        sns.heatmap(x.squeeze().numpy().transpose(), cmap="magma_r")
+        print(outputs, outputs.shape)
+
+        fig, axes = plt.subplots(n_layers, 3, figsize=(12, 6))
+        # fig, axes = plt.subplots(n_layers, n_heads, figsize=(12, 6))
+        for l in range(n_layers):
+            in_proj_weight = model.transformer_encoder.layers[l].self_attn.in_proj_weight
+            in_proj_bias = model.transformer_encoder.layers[l].self_attn.in_proj_bias
+            q, k, v = in_proj_weight.view((3, d_model, d_model)).view((3, d_model, n_heads, d_model // n_heads)).chunk(3)
+            q_b, k_b, v_b = in_proj_bias.view((3, n_heads, d_model // n_heads)).chunk(3)
+            q = q.squeeze().transpose(0, 1)
+            k = k.squeeze().transpose(0, 1)
+            attn_all = torch.zeros((n_heads, seq_len, seq_len))
+            for head in range(n_heads):
+                q_1 = q[head]
+                k_1 = k[head]
+                q_b1 = q_b.squeeze()[head]
+                k_b1 = k_b.squeeze()[head]
+                Q = torch.matmul(activation['layer{}_in'.format(l)].squeeze(), q_1) + q_b1
+                K = torch.matmul(activation['layer{}_in'.format(l)].squeeze(), k_1) + k_b1
+                att = torch.matmul(Q, torch.transpose(K, 0, 1))
+                for row in range(seq_len):
+                    att[row, : ] = (att[row, : ] - torch.mean(att[row, :])) / torch.std(att[row, :])
+                att_softmax = att
+                attn_all[head, :, :] = att_softmax
+
+                print("layer {}, head {}".format(l, head), att_softmax.shape)
+                # axes[l, head].plot(att_softmax[-1, :].detach().numpy())
+            attn_rollout = (torch.eye(seq_len) + torch.mean(attn_all, dim=0)) * attn_rollout if l!=0 else torch.mean(attn_all, dim=0)
+            print(attn_rollout.shape)
+            important_index = [0, 240, 301]
+            for idx, im in enumerate(important_index):
+                attn_rollout[im, im] = 0
+                axes[l, idx].plot(attn_rollout[im, :].detach().numpy())
+
+        plt.show()
+
+
+    exit()
+
 
     model.eval()
     test_predict = []
     test_labels = []
-    randperm_seg = torch.randperm(SEGMENT)
+    # randperm_seg = torch.randperm(SEGMENT)
     # randperm_roi = torch.randperm(SEQ_LEN)
     # since we're not training, we don't need to calculate the gradients for our outputs
     with torch.no_grad():
-        for batch in tqdm(validation_loader, position=0, leave=True):
+        for batch in tqdm(train_loader, position=0, leave=True):
             x, y = batch['x'], batch['y']
-            x[:, :SEGMENT, :] = x[:, randperm_seg, :]
+            # x[:, :SEGMENT, :] = x[:, randperm_seg, :]
             x, y = x.to(device), y.to(device)
             x = torch.transpose(x, 0, 1)
-            y_hat = model(x)[-1, :, :]
-            _, predicted = torch.max(y_hat.data, 1)
+            y_hat = model(x)[-1, :, 0]
+            predicted = y_hat.data
             # print('predicted: {}'.format(predicted))
             test_predict += predicted.tolist()
             test_labels += y.view(-1, ).tolist()
 
-            # same_sample = np.where(y.cpu().numpy() == 0)[0][0]
-            # diff_sample = np.where(y.cpu().numpy() == 1)[0][0]
+            same_sample = np.where(y.cpu().numpy() == 0)[0][0]
+            diff_sample = np.where(y.cpu().numpy() == 1)[0][0]
             #
             # print(activation['pos_encoder'].shape)
             #
-            # plt.figure(figsize=(6,6))
-            # sns.heatmap(activation['encoder'][:,same_sample,:].cpu().numpy().transpose(), cmap="magma_r")
-            # plt.figure(figsize=(6,6))
-            # sns.heatmap(activation['pos_encoder'][:,same_sample,:].cpu().numpy().transpose(),  cmap="magma_r")
-            # # sns.heatmap((activation['pos_encoder'][-61:-1,same_sample,:]- activation['encoder'][:,same_sample,:]  * math.sqrt(512)).cpu().numpy().transpose(),  cmap="magma_r")
-            #
-            # plt.figure(figsize=(3, 6))
-            # sns.heatmap(activation['encoder'][:, diff_sample, :].cpu().numpy().transpose())
-            # plt.figure(figsize=(15, 6))
-            # sns.heatmap(activation['pos_encoder'][:, diff_sample, :].cpu().numpy().transpose())
-            # plt.show()
+            plt.figure(figsize=(6,6))
+            sns.heatmap(activation['encoder'][:,same_sample,:].cpu().numpy().transpose(), cmap="magma_r")
+            plt.figure(figsize=(6,6))
+            sns.heatmap(activation['pos_encoder'][:,same_sample,:].cpu().numpy().transpose(),  cmap="magma_r")
+            # sns.heatmap((activation['pos_encoder'][-61:-1,same_sample,:]- activation['encoder'][:,same_sample,:]  * math.sqrt(512)).cpu().numpy().transpose(),  cmap="magma_r")
+
+            plt.figure(figsize=(3, 6))
+            sns.heatmap(activation['encoder'][:, diff_sample, :].cpu().numpy().transpose())
+            plt.figure(figsize=(15, 6))
+            sns.heatmap(activation['pos_encoder'][:, diff_sample, :].cpu().numpy().transpose())
+            plt.show()
             # return
 
     conf = confusion_matrix(test_labels, test_predict)
@@ -570,9 +659,9 @@ def visualize_model():
 
 if __name__ == '__main__':
     # train()
-    pretrain("TUSZ")
+    # pretrain("TUSZ")
     # evaluate()
     # train_scratch(dataset="TUSZ")
-    # evaluate_pretraining()
+    evaluate_pretraining()
     # finetune()
     # visualize_model()
