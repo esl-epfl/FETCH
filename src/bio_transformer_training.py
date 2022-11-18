@@ -173,8 +173,8 @@ def train(model, device, save_path: str, learning_rate: float = 1e-5):
                                   torch.from_numpy(sample_time_train).long())
     sampler = ImbalancedDataSampler(torch.from_numpy(seizure_indices).long(),
                                     torch.from_numpy(non_seizure_indices).long(),
-                                    torch.from_numpy(post_ictal_indices).long(), overlap=10)
-    train_loader = DataLoader(train_set, batch_size=64, sampler=sampler, num_workers=4)
+                                    torch.from_numpy(post_ictal_indices).long(), overlap=20)
+    train_loader = DataLoader(train_set, batch_size=32, sampler=sampler, num_workers=4)
 
     # classes = {0: 0, 1: 0}
 
@@ -194,7 +194,7 @@ def train(model, device, save_path: str, learning_rate: float = 1e-5):
     val_loader = DataLoader(val_set, shuffle=False, batch_size=16, sampler=val_sampler)
 
     # Training loop
-    optimizer = SGD(model.parameters(), lr=learning_rate)
+    optimizer = AdamW(model.parameters(), lr=learning_rate)
     criterion = BCEWithLogitsLoss()
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.95)
     N_EPOCHS = 20
@@ -240,7 +240,6 @@ def train(model, device, save_path: str, learning_rate: float = 1e-5):
         print(f"Epoch {epoch + 1}/{N_EPOCHS} Training loss: {train_loss / len(train_loader):.2f} ")
         train_loss_list.append(train_loss / len(train_loader))
 
-
     torch.save(model.state_dict(), save_path)
     print("Validation_loss_list = ", val_loss_list)
     print("Train_loss_list = ", train_loss_list)
@@ -260,12 +259,12 @@ def pretrain(dataset):
     X, labels, minute_labels, pat_file_start_end, sample_time, valid_labels = get_data(pretrain_mode=True, dataset=dataset)
     print(pat_file_start_end)
     d_feature = 126 if dataset == "TUSZ" else 144
-    d_model = 768
-    n_heads = 12
+    d_model = 256
+    n_heads = 4
     d_hid = 4 * d_model
-    seq_len = SEQ_LEN + 2
+    seq_len = SEQ_LEN + 3
     segment = SEGMENT
-    n_layers = 12
+    n_layers = 4
     n_out = 1
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print('device : ', device)
@@ -303,8 +302,9 @@ def pretrain(dataset):
     optimizer = SGD(model.parameters(), lr=0.01, momentum=0.9, weight_decay=1e-3)
     criterion = BCEWithLogitsLoss()
     # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.95)
-    N_EPOCHS = 6
+    N_EPOCHS = 15
     val_loss_list = []
+    save_path = '../output/pretrain_relative_model{}_n{}_{}'.format(SEQ_LEN, n_layers, dataset)
     for epoch in tqdm(range(N_EPOCHS), desc="Training"):
         model.train(True)  # turn on train mode
         train_loss = 0.0
@@ -321,41 +321,46 @@ def pretrain(dataset):
             # torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
             optimizer.step()
 
-        # model.eval()
-        # with torch.no_grad():
-        #     running_vloss = 0.0
-        #     for i, batch in enumerate(validation_loader):
-        #         x, y = batch['x'], batch['y']
-        #         x, y = x.to(device), y.to(device)
-        #         x = torch.transpose(x, 0, 1)
-        #         voutputs = model(x)
-        #         vloss = criterion(voutputs[-1, :, 0], y.view(-1, ))
-        #         running_vloss += vloss.detach().cpu().item()
+        model.eval()
+        with torch.no_grad():
+            running_vloss = 0.0
+            for i, batch in enumerate(validation_loader):
+                x, y = batch['x'], batch['y']
+                x, y = x.to(device), y.to(device)
+                x = torch.transpose(x, 0, 1)
+                voutputs = model(x)
+                vloss = criterion(voutputs[-1, :, 0], y.view(-1, ))
+                running_vloss += vloss.detach().cpu().item()
+
+            avg_vloss = running_vloss / len(validation_loader)
+            print('LOSS valid {}'.format(avg_vloss))
+            val_loss_list.append(avg_vloss)
+            if avg_vloss <= np.min(np.array(val_loss_list)):
+                torch.save(model.state_dict(), "{}_best".format(save_path))
 
         # scheduler.step()
         # lr = scheduler.get_last_lr()[0]
 
         print(f"Epoch {epoch + 1}/{N_EPOCHS} Training loss: {train_loss / len(train_loader):.2f} ")
 
-    torch.save(model.state_dict(), '../output/fake60_model{}_n{}_{}'.format(SEQ_LEN, n_layers, dataset))
+    torch.save(model.state_dict(), save_path)
 
 
 def train_scratch(dataset):
     d_feature = 126 if dataset == "TUSZ" else 144
-    d_model = 256
-    n_heads = 4
+    d_model = 512
+    n_heads = 8
     d_hid = 4 * d_model
-    seq_len = SEQ_LEN + 7
+    seq_len = SEQ_LEN + 3
     segment = SEGMENT
-    n_layers = 4
-    n_out = 2
+    n_layers = 8
+    n_out = 1
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print('device : ', device)
     model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len,
-                           n_layers=n_layers,
-                           n_out=n_out, device=device, segments=segment).to(device)
-    savepath = '../output/model{}_{}_{}_scratch'.format(SEQ_LEN, n_layers, dataset)
-    train(model, device, savepath)
+                           n_layers=n_layers, n_out=n_out, device=device, segments=segment).to(device)
+    savepath = '../output/model{}_{}_{}_scratch_relative'.format(SEQ_LEN, n_layers, dataset)
+    train(model, device, savepath, learning_rate=1e-3)
 
 
 def finetune():
@@ -465,7 +470,10 @@ def evaluate_pretraining(dataset='TUSZ'):
 
     def get_activation(name):
         def hook(model, input, output):
-            activation[name] = output.detach()
+            if len(output) == 2:
+                activation[name] = output[0].detach()
+            else:
+                activation[name] = output.detach()
 
         return hook
 
@@ -473,7 +481,7 @@ def evaluate_pretraining(dataset='TUSZ'):
     d_model = 256
     n_heads = 4
     d_hid = 4 * d_model
-    seq_len = SEQ_LEN + 2
+    seq_len = SEQ_LEN + 3
     segment = SEGMENT
     n_layers = 4
     n_out = 1
@@ -494,9 +502,7 @@ def evaluate_pretraining(dataset='TUSZ'):
                                             sample_time['train'])
     sampler = EvaluateSampler(torch.from_numpy(valid_labels['train']).int(), overlap=60)
     train_loader = DataLoader(train_set, batch_size=1, sampler=sampler)
-    model.load_state_dict(torch.load('../output/fake60_model{}_n{}_{}'.format(SEQ_LEN, n_layers, dataset)))
-
-
+    model.load_state_dict(torch.load('../output/pretrain_relative_model{}_n{}_{}_best'.format(SEQ_LEN, n_layers, dataset)))
 
     # load_path = '../output/model{}_{}_{}_scratch_best'.format(SEQ_LEN, n_layers, dataset)
     # model.load_state_dict(torch.load(load_path))
@@ -516,57 +522,89 @@ def evaluate_pretraining(dataset='TUSZ'):
         if param.requires_grad:
             print(name, param.data.shape)
 
-
-    hook1 = model.pos_encoder.register_forward_hook(get_activation('layer0_in'))
+    hook1 = model.encoder.register_forward_hook(get_activation('layer0_in'))
     for i in range(1, n_layers):
         model.transformer_encoder.layers[i-1].register_forward_hook(get_activation('layer{}_in'.format(i)))
+    # model.transformer_encoder.layers[0].self_attn.register_forward_hook(get_activation('self_attn'))
+    # model.transformer_encoder.layers[0].norm1.register_forward_hook(get_activation('norm1'))
+    # model.encoder.register_forward_hook(get_activation('encoder'))
 
     it = iter(train_loader)
-    for iteration in range(10):
+    print(len(train_loader))
+    mmd_label_df = pd.DataFrame(columns=['label', 'mmd'])
+    for iteration in range(len(train_loader) - 1):
         batch = next(it)
         x, y = batch['x'], batch['y']
         x, y = x.to(device), y.to(device)
         x = torch.transpose(x, 0, 1)
-        outputs = model(x)[-1, :, :]
-        plt.subplots(2,1,figsize=(6, 12))
+        outputs = model(x)[0][-1, :, :]
+        tokens = model(x)[1]
+        plt.subplots(2, 1, figsize=(6, 12))
         plt.subplot(211)
         plt.title("{}, {}".format(y.detach().item(), batch['len'].detach()))
-        sns.heatmap(activation['layer0_in'].squeeze().numpy().transpose(), cmap="magma_r")
-        plt.subplot(212)
         sns.heatmap(x.squeeze().numpy().transpose(), cmap="magma_r")
+        plt.subplot(212)
+        sns.heatmap(tokens.detach().squeeze().numpy().transpose(), cmap="magma_r")
+        # sns.heatmap(activation['self_attn'].squeeze().numpy().transpose(), cmap="magma_r")
         print(outputs, outputs.shape)
 
         fig, axes = plt.subplots(n_layers, 3, figsize=(12, 6))
-        # fig, axes = plt.subplots(n_layers, n_heads, figsize=(12, 6))
-        for l in range(n_layers):
-            in_proj_weight = model.transformer_encoder.layers[l].self_attn.in_proj_weight
-            in_proj_bias = model.transformer_encoder.layers[l].self_attn.in_proj_bias
-            q, k, v = in_proj_weight.view((3, d_model, d_model)).view((3, d_model, n_heads, d_model // n_heads)).chunk(3)
-            q_b, k_b, v_b = in_proj_bias.view((3, n_heads, d_model // n_heads)).chunk(3)
-            q = q.squeeze().transpose(0, 1)
-            k = k.squeeze().transpose(0, 1)
-            attn_all = torch.zeros((n_heads, seq_len, seq_len))
-            for head in range(n_heads):
-                q_1 = q[head]
-                k_1 = k[head]
-                q_b1 = q_b.squeeze()[head]
-                k_b1 = k_b.squeeze()[head]
-                Q = torch.matmul(activation['layer{}_in'.format(l)].squeeze(), q_1) + q_b1
-                K = torch.matmul(activation['layer{}_in'.format(l)].squeeze(), k_1) + k_b1
-                att = torch.matmul(Q, torch.transpose(K, 0, 1))
-                for row in range(seq_len):
-                    att[row, : ] = (att[row, : ] - torch.mean(att[row, :])) / torch.std(att[row, :])
-                att_softmax = att
-                attn_all[head, :, :] = att_softmax
+        # fig, axes = plt.subplots(n_layers, n_heads*2, figsize=(12, 6))
 
-                print("layer {}, head {}".format(l, head), att_softmax.shape)
-                # axes[l, head].plot(att_softmax[-1, :].detach().numpy())
-            attn_rollout = (torch.eye(seq_len) + torch.mean(attn_all, dim=0)) * attn_rollout if l!=0 else torch.mean(attn_all, dim=0)
-            print(attn_rollout.shape)
-            important_index = [0, 240, 301]
+        for l in range(n_layers):
+            x_in = tokens
+            in_proj_weight = model.transformer_encoder.layers[l].self_attn
+            q, k, v = in_proj_weight.w_q, in_proj_weight.w_k, in_proj_weight.w_v
+            Q = torch.einsum('tbf,hfa->bhta', x_in, q)
+            K = torch.einsum('tbf,hfa->bhta', x_in, k)
+            V = torch.einsum('tbf,hfa->bhta', x_in, v)
+            attn = torch.einsum('bhqa,bhka->bhqk', Q, K).squeeze()
+            print(Q.shape, K.shape, V.shape)
+            print(attn.shape)
+
+            # for h in range(n_heads):
+            #     axes[l, 2*h].plot(attn[h,-1,:-1].detach().numpy())
+            #     axes[l, 2*h+1].plot(attn[h,240,:240].detach().numpy())
+
+            # att = torch.matmul(Q, torch.transpose(K, -2, -1))
+            # print("Attention: ", att.shape)
+            # attn_all = F.normalize(attn / 8.0, dim=-1)
+            # attn_all = attn
+            # scores = torch.matmul(attn_all, V)
+            # print("Scores: ", scores.shape)
+            # concat = scores.transpose(0, 1).contiguous().view(-1, d_model)
+            # print("Concatenate: ", concat.shape)
+            # mha = torch.matmul(concat, out_proj_weight) + out_proj_bias
+            # print("MHA: ", mha.shape)
+            #
+            # mha = activation['self_attn'].squeeze()
+            # print("MHA : ", mha.shape)
+            # add_norm = x_in + norm_alpha *\
+            #            (mha - mha.mean(dim=-1, keepdim=True)) / (mha.std(dim=-1, keepdim=True) + 1e-5) + norm_bias
+            # print("Add/Norm: ", add_norm.shape)
+            # plt.subplots(2, 1, figsize=(6, 12))
+            # plt.subplot(211)
+            # plt.title("Norm in Layer ".format(y.detach().item(), batch['len'].detach()))
+            # sns.heatmap(concat.detach().squeeze().numpy().transpose(), cmap="magma_r")
+            # plt.subplot(212)
+            # sns.heatmap(add_norm.detach().numpy().transpose(), cmap="magma_r")
+            # for h in range(n_heads):
+            #     axes[l, h].imshow(attn_all[h, :, :].detach().numpy())
+            important_index = [240, 271, 302]
             for idx, im in enumerate(important_index):
-                attn_rollout[im, im] = 0
-                axes[l, idx].plot(attn_rollout[im, :].detach().numpy())
+                # for row in range(seq_len):
+                #     att[row, : ] = (att[row, : ] - torch.mean(att[row, :])) / torch.std(att[row, :])
+                att_softmax = torch.mean(attn, dim=0)
+                # attn_all[head, :, :] = att_softmax
+
+                print("layer {}, head {}".format(l, im), att_softmax.shape)
+                axes[l, idx].plot(att_softmax[im, :].detach().numpy())
+            # attn_rollout = (torch.eye(seq_len) + torch.mean(attn_all, dim=0)) * attn_rollout if l!=0 else torch.mean(attn_all, dim=0)
+            # print(attn_rollout.shape)
+            # important_index = [240, -1]
+            # for idx, im in enumerate(important_index):
+            #     attn_rollout[im, im] = 0
+            #     axes[l, idx].plot(attn_rollout[im, :].detach().numpy())
 
         plt.show()
 
@@ -661,7 +699,7 @@ if __name__ == '__main__':
     # train()
     # pretrain("TUSZ")
     # evaluate()
-    # train_scratch(dataset="TUSZ")
-    evaluate_pretraining()
+    train_scratch(dataset="TUSZ")
+    # evaluate_pretraining()
     # finetune()
     # visualize_model()
