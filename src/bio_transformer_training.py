@@ -45,7 +45,7 @@ def get_data(pretrain_mode=False, dataset='TUSZ'):
         df.apply(set_labels, axis=1)
 
     df = df.sort_values(by='patient')
-    # df = df.groupby('patient').head(1)
+    df = df.groupby('patient').head(1)
 
     if dataset == "epilepsiae":
         test_set = [x for x in df['file_name'].tolist() if x.startswith('Patient_1_')]
@@ -194,10 +194,23 @@ def train(model, device, save_path: str, learning_rate: float = 1e-5):
     val_loader = DataLoader(val_set, shuffle=False, batch_size=16, sampler=val_sampler)
 
     # Training loop
-    optimizer = AdamW(model.parameters(), lr=learning_rate)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0)
+    lr_sched = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[125, 150, 175], gamma=.5)
+
+    def set_lr(new_lr):
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = new_lr
+
+    target_lr = learning_rate
+
+    def schedule_lr(iteration):
+        iteration = iteration + 1
+        if iteration <= 10000:
+            set_lr(iteration * target_lr / 10000)
+
+
     criterion = BCEWithLogitsLoss()
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.95)
-    N_EPOCHS = 20
+    N_EPOCHS = 400
     train_loss_list = []
     val_loss_list = []
 
@@ -206,6 +219,7 @@ def train(model, device, save_path: str, learning_rate: float = 1e-5):
         train_loss = 0.0
         for i, batch in enumerate(tqdm(train_loader, desc=f"Epoch {epoch + 1}", position=0, leave=True)):
             optimizer.zero_grad()
+            schedule_lr(epoch*len(train_loader) + i)
             x, y = batch['x'], batch['y']
             x, y = x.to(device), y.to(device)
             x = torch.transpose(x, 0, 1)
@@ -234,10 +248,10 @@ def train(model, device, save_path: str, learning_rate: float = 1e-5):
             if avg_vloss <= np.min(np.array(val_loss_list)):
                 torch.save(model.state_dict(), "{}_best".format(save_path))
 
-            scheduler.step()
-            lr = scheduler.get_last_lr()[0]
+            lr_sched.step()
+            lr = lr_sched.get_last_lr()[0]
             #
-        print(f"Epoch {epoch + 1}/{N_EPOCHS} Training loss: {train_loss / len(train_loader):.2f} ")
+        print(f"Epoch {epoch + 1}/{N_EPOCHS} Training loss: {train_loss / len(train_loader):.2f} Learning Rate {lr} ")
         train_loss_list.append(train_loss / len(train_loader))
 
     torch.save(model.state_dict(), save_path)
@@ -259,12 +273,12 @@ def pretrain(dataset):
     X, labels, minute_labels, pat_file_start_end, sample_time, valid_labels = get_data(pretrain_mode=True, dataset=dataset)
     print(pat_file_start_end)
     d_feature = 126 if dataset == "TUSZ" else 144
-    d_model = 256
-    n_heads = 4
+    d_model = 512
+    n_heads = 8
     d_hid = 4 * d_model
     seq_len = SEQ_LEN + 3
     segment = SEGMENT
-    n_layers = 4
+    n_layers = 8
     n_out = 1
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print('device : ', device)
@@ -281,7 +295,7 @@ def pretrain(dataset):
 
     train_set = PatientDiscriminatorDataset(torch.from_numpy(X_train).float(), pat_start_end['train'], sample_time['train'])
     sampler = EvaluateSampler(torch.from_numpy(valid_labels['train']).int(), overlap=20)
-    train_loader = DataLoader(train_set, batch_size=128, sampler=sampler)
+    train_loader = DataLoader(train_set, batch_size=32, sampler=sampler)
 
     validation_set = PatientDiscriminatorEvaluationDataset(torch.from_numpy(X["val"]).float(), pat_start_end['val'],
                                                            torch.from_numpy(minute_labels['val']).int(),
@@ -299,10 +313,24 @@ def pretrain(dataset):
     #         plt.close()
 
     # Training loop
-    optimizer = SGD(model.parameters(), lr=0.01, momentum=0.9, weight_decay=1e-3)
+    learning_rate = 2e-5
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0)
+    lr_sched = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[15, 20, 25, 30, 35], gamma=.5)
+
+    def set_lr(new_lr):
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = new_lr
+
+    target_lr = learning_rate
+
+    def schedule_lr(iteration):
+        iteration = iteration + 1
+        if iteration <= 20000:
+            set_lr(iteration * target_lr / 20000)
+
     criterion = BCEWithLogitsLoss()
     # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.95)
-    N_EPOCHS = 15
+    N_EPOCHS = 36
     val_loss_list = []
     save_path = '../output/pretrain_relative_model{}_n{}_{}'.format(SEQ_LEN, n_layers, dataset)
     for epoch in tqdm(range(N_EPOCHS), desc="Training"):
@@ -310,6 +338,7 @@ def pretrain(dataset):
         train_loss = 0.0
         for i, batch in enumerate(tqdm(train_loader, desc=f"Epoch {epoch + 1}", position=0, leave=True)):
             optimizer.zero_grad()
+            schedule_lr(epoch * len(train_loader) + i)
             x, y = batch['x'], batch['y']
             x, y = x.to(device), y.to(device)
             x = torch.transpose(x, 0, 1)
@@ -338,10 +367,10 @@ def pretrain(dataset):
             if avg_vloss <= np.min(np.array(val_loss_list)):
                 torch.save(model.state_dict(), "{}_best".format(save_path))
 
-        # scheduler.step()
-        # lr = scheduler.get_last_lr()[0]
+        lr_sched.step()
+        lr = lr_sched.get_last_lr()[0]
 
-        print(f"Epoch {epoch + 1}/{N_EPOCHS} Training loss: {train_loss / len(train_loader):.2f} ")
+        print(f"Epoch {epoch + 1}/{N_EPOCHS} Training loss: {train_loss / len(train_loader):.2f} LR {lr} ")
 
     torch.save(model.state_dict(), save_path)
 
@@ -360,7 +389,7 @@ def train_scratch(dataset):
     model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len,
                            n_layers=n_layers, n_out=n_out, device=device, segments=segment).to(device)
     savepath = '../output/model{}_{}_{}_scratch_relative'.format(SEQ_LEN, n_layers, dataset)
-    train(model, device, savepath, learning_rate=1e-3)
+    train(model, device, savepath, learning_rate=2e-4)
 
 
 def finetune():
@@ -410,19 +439,19 @@ def print_results(conf):
 
 def evaluate(dataset="TUSZ"):
     d_feature = 126 if dataset == "TUSZ" else 144
-    d_model = 256
-    n_heads = 4
+    d_model = 512
+    n_heads = 8
     d_hid = 4 * d_model
-    seq_len = SEQ_LEN + 7
+    seq_len = SEQ_LEN + 3
     segment = SEGMENT
-    n_layers = 4
+    n_layers = 8
     n_out = 1
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print('device : ', device)
     model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len,
                            n_layers=n_layers,
                            n_out=n_out, device=device, segments=segment).to(device)
-    load_path = '../output/pretrain_model{}_n{}_{}'.format(SEQ_LEN, n_layers, dataset)
+    load_path = '../output/model{}_{}_{}_scratch_relative_best'.format(SEQ_LEN, n_layers, dataset)
     model.load_state_dict(torch.load(load_path))
 
     print(model)
@@ -440,20 +469,39 @@ def evaluate(dataset="TUSZ"):
     model.eval()
     test_predict = []
     test_labels = []
-
+    fig_cnt = 0
     # since we're not training, we don't need to calculate the gradients for our outputs
     with torch.no_grad():
         for batch in test_loader:
             x, y = batch['x'], batch['y']
             x, y = x.to(device), y.to(device)
             x = torch.transpose(x, 0, 1)
-            outputs = model(x)[-1, :, :]
+            outputs = model(x)[-1, :, 0]
             # print('output shape: {}'.format(outputs.shape))
             # the class with the highest energy is what we choose as prediction
-            _, predicted = torch.max(outputs.data, 1)
+            # _, predicted = torch.max(outputs.data, 1)
+            predicted = (outputs > 0.5) * 1.0
             # print('predicted: {}'.format(predicted))
             test_predict += predicted.tolist()
             test_labels += y.view(-1, ).tolist()
+
+            # for i in range(len(predicted)):
+            #     if int(predicted.tolist()[i]) ==0 and int( y.view(-1, ).tolist()[i]) == 1:
+            #         plt.figure(figsize=(12,12))
+            #         plt.imshow(x[:,i,:].detach().cpu().numpy().transpose())
+            #         plt.title('FN')
+            #         plt.savefig('../output/figures/FP_FN/{}.png'.format(fig_cnt))
+            #         plt.close()
+            #         fig_cnt+=1
+            #     elif int(predicted.tolist()[i]) == 1 and int( y.view(-1, ).tolist()[i]) == 0:
+            #         plt.figure(figsize=(12,12))
+            #         plt.imshow(x[:,i,:].detach().cpu().numpy().transpose())
+            #         plt.title('FP')
+            #         plt.savefig('../output/figures/FP_FN/{}.png'.format(fig_cnt))
+            #         plt.close()
+            #         fig_cnt+=1
+
+
             # print('labels: {}'.format(labels.view(-1,)))
             # correct += (predicted == labels.view(-1,)).sum().item()
             # print('(predicted == labels): {}'.format((predicted == labels.view(-1,))))
@@ -478,12 +526,12 @@ def evaluate_pretraining(dataset='TUSZ'):
         return hook
 
     d_feature = 126 if dataset == "TUSZ" else 144
-    d_model = 256
-    n_heads = 4
+    d_model = 512
+    n_heads = 8
     d_hid = 4 * d_model
     seq_len = SEQ_LEN + 3
     segment = SEGMENT
-    n_layers = 4
+    n_layers = 8
     n_out = 1
     torch.random.manual_seed(42)
     # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -562,6 +610,12 @@ def evaluate_pretraining(dataset='TUSZ'):
             print(Q.shape, K.shape, V.shape)
             print(attn.shape)
 
+            res_att_mat = attn.sum(axis=0) / attn.shape[0]
+            res_att_mat = res_att_mat + torch.eye(res_att_mat.shape[0])
+            res_att_mat = res_att_mat / res_att_mat.sum(axis=-1)[..., None]
+            print(res_att_mat.shape)
+
+
             # for h in range(n_heads):
             #     axes[l, 2*h].plot(attn[h,-1,:-1].detach().numpy())
             #     axes[l, 2*h+1].plot(attn[h,240,:240].detach().numpy())
@@ -590,16 +644,16 @@ def evaluate_pretraining(dataset='TUSZ'):
             # sns.heatmap(add_norm.detach().numpy().transpose(), cmap="magma_r")
             # for h in range(n_heads):
             #     axes[l, h].imshow(attn_all[h, :, :].detach().numpy())
+            attn_rollout = torch.matmul(attn_rollout, res_att_mat) if l != 0 else res_att_mat
             important_index = [240, 271, 302]
             for idx, im in enumerate(important_index):
                 # for row in range(seq_len):
                 #     att[row, : ] = (att[row, : ] - torch.mean(att[row, :])) / torch.std(att[row, :])
-                att_softmax = torch.mean(attn, dim=0)
+                # att_softmax = torch.mean(attn, dim=0)
                 # attn_all[head, :, :] = att_softmax
 
-                print("layer {}, head {}".format(l, im), att_softmax.shape)
-                axes[l, idx].plot(att_softmax[im, :].detach().numpy())
-            # attn_rollout = (torch.eye(seq_len) + torch.mean(attn_all, dim=0)) * attn_rollout if l!=0 else torch.mean(attn_all, dim=0)
+                print("layer {}, head {}".format(l, im), attn_rollout.shape)
+                axes[l, idx].plot(attn_rollout[im, :].detach().numpy())
             # print(attn_rollout.shape)
             # important_index = [240, -1]
             # for idx, im in enumerate(important_index):
@@ -699,7 +753,7 @@ if __name__ == '__main__':
     # train()
     # pretrain("TUSZ")
     # evaluate()
-    train_scratch(dataset="TUSZ")
-    # evaluate_pretraining()
+    # train_scratch(dataset="TUSZ")
+    evaluate_pretraining()
     # finetune()
     # visualize_model()
