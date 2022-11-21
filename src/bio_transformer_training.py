@@ -45,7 +45,7 @@ def get_data(pretrain_mode=False, dataset='TUSZ'):
         df.apply(set_labels, axis=1)
 
     df = df.sort_values(by='patient')
-    df = df.groupby('patient').head(1)
+    # df = df.groupby('patient').head(1)
 
     if dataset == "epilepsiae":
         test_set = [x for x in df['file_name'].tolist() if x.startswith('Patient_1_')]
@@ -195,7 +195,7 @@ def train(model, device, save_path: str, learning_rate: float = 1e-5):
 
     # Training loop
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0)
-    lr_sched = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[125, 150, 175], gamma=.5)
+    lr_sched = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[30, 40, 50], gamma=.5)
 
     def set_lr(new_lr):
         for param_group in optimizer.param_groups:
@@ -208,9 +208,8 @@ def train(model, device, save_path: str, learning_rate: float = 1e-5):
         if iteration <= 10000:
             set_lr(iteration * target_lr / 10000)
 
-
     criterion = BCEWithLogitsLoss()
-    N_EPOCHS = 400
+    N_EPOCHS = 60
     train_loss_list = []
     val_loss_list = []
 
@@ -397,20 +396,20 @@ def finetune():
     print('device : ', device)
 
     d_feature = 126 #144
-    d_model = 256
-    n_heads = 4
+    d_model = 512
+    n_heads = 8
     d_hid = 4 * d_model
-    seq_len = SEQ_LEN + 7
+    seq_len = SEQ_LEN + 5
     segment = SEGMENT
-    n_layers = 4
+    n_layers = 8
     n_out = 1
 
     model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len,
                            n_layers=n_layers,
                            n_out=n_out, device=device, segments=segment).to(device)
-    model.load_state_dict(torch.load("../output/pretrain_model300_n4_TUSZ"))
+    model.load_state_dict(torch.load("../output/pretrain_relative_model300_n8_TUSZ"))
 
-    savepath = '../output/finetuned_model{}_n{}'.format(SEQ_LEN, n_layers)
+    savepath = '../output/finetuned_relative_model{}_n{}'.format(SEQ_LEN, n_layers)
     model.decoder.weight.data.uniform_(-0.1, 0.1)
     model.decoder.bias.data.uniform_(-0.1, 0.1)
     # model.sep_token.requires_grad = False
@@ -425,7 +424,7 @@ def finetune():
         if param.requires_grad:
             print(
                 name, param.data.shape)
-    train(model, device, savepath, learning_rate=1e-4)
+    train(model, device, savepath, learning_rate=1e-6)
 
 
 def print_results(conf):
@@ -610,7 +609,7 @@ def evaluate_pretraining(dataset='TUSZ'):
             print(Q.shape, K.shape, V.shape)
             print(attn.shape)
 
-            res_att_mat = attn.sum(axis=0) / attn.shape[0]
+            res_att_mat = torch.max(attn, dim=0)[0]
             res_att_mat = res_att_mat + torch.eye(res_att_mat.shape[0])
             res_att_mat = res_att_mat / res_att_mat.sum(axis=-1)[..., None]
             print(res_att_mat.shape)
@@ -754,6 +753,6 @@ if __name__ == '__main__':
     # pretrain("TUSZ")
     # evaluate()
     # train_scratch(dataset="TUSZ")
-    evaluate_pretraining()
-    # finetune()
+    # evaluate_pretraining()
+    finetune()
     # visualize_model()
