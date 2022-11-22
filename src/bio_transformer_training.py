@@ -272,18 +272,18 @@ def pretrain(dataset):
     X, labels, minute_labels, pat_file_start_end, sample_time, valid_labels = get_data(pretrain_mode=True, dataset=dataset)
     print(pat_file_start_end)
     d_feature = 126 if dataset == "TUSZ" else 144
-    d_model = 512
-    n_heads = 8
+    d_model = 128
+    n_heads = 2
     d_hid = 4 * d_model
     seq_len = SEQ_LEN + 3
     segment = SEGMENT
-    n_layers = 8
+    n_layers = 4
     n_out = 1
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    # device = torch.device('cpu')
     print('device : ', device)
     model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len,
-                           n_layers=n_layers,
-                           n_out=n_out, device=device, segments=segment).to(device)
+                           n_layers=n_layers, n_out=n_out, device=device, segments=segment).to(device)
     # model.load_state_dict(torch.load("../output/fake_model{}_n{}_{}".format(SEQ_LEN, n_layers, dataset)))
 
     X_train = X["train"]
@@ -293,8 +293,8 @@ def pretrain(dataset):
     print("Pat Start End: ", pat_start_end)
 
     train_set = PatientDiscriminatorDataset(torch.from_numpy(X_train).float(), pat_start_end['train'], sample_time['train'])
-    sampler = EvaluateSampler(torch.from_numpy(valid_labels['train']).int(), overlap=20)
-    train_loader = DataLoader(train_set, batch_size=32, sampler=sampler)
+    sampler = EvaluateSampler(torch.from_numpy(valid_labels['train']).int(), overlap=10)
+    train_loader = DataLoader(train_set, batch_size=128, sampler=sampler)
 
     validation_set = PatientDiscriminatorEvaluationDataset(torch.from_numpy(X["val"]).float(), pat_start_end['val'],
                                                            torch.from_numpy(minute_labels['val']).int(),
@@ -314,7 +314,7 @@ def pretrain(dataset):
     # Training loop
     learning_rate = 2e-5
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0)
-    lr_sched = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[15, 20, 25, 30, 35], gamma=.5)
+    lr_sched = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[20, 30, 40, 50, 70], gamma=.5)
 
     def set_lr(new_lr):
         for param_group in optimizer.param_groups:
@@ -329,9 +329,9 @@ def pretrain(dataset):
 
     criterion = BCEWithLogitsLoss()
     # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.95)
-    N_EPOCHS = 36
+    N_EPOCHS = 100
     val_loss_list = []
-    save_path = '../output/pretrain_relative_model{}_n{}_{}'.format(SEQ_LEN, n_layers, dataset)
+    save_path = '../output/pretrain_encoder_model{}_n{}_{}'.format(SEQ_LEN, n_layers, dataset)
     for epoch in tqdm(range(N_EPOCHS), desc="Training"):
         model.train(True)  # turn on train mode
         train_loss = 0.0
@@ -525,16 +525,16 @@ def evaluate_pretraining(dataset='TUSZ'):
         return hook
 
     d_feature = 126 if dataset == "TUSZ" else 144
-    d_model = 512
-    n_heads = 8
+    d_model = 128
+    n_heads = 2
     d_hid = 4 * d_model
     seq_len = SEQ_LEN + 3
     segment = SEGMENT
-    n_layers = 8
+    n_layers = 4
     n_out = 1
-    torch.random.manual_seed(42)
+    torch.random.manual_seed(62)
     # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    device  = torch.device('cpu')
+    device = torch.device('cpu')
     print('device : ', device)
     model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len,
                            n_layers=n_layers,
@@ -549,7 +549,7 @@ def evaluate_pretraining(dataset='TUSZ'):
                                             sample_time['train'])
     sampler = EvaluateSampler(torch.from_numpy(valid_labels['train']).int(), overlap=60)
     train_loader = DataLoader(train_set, batch_size=1, sampler=sampler)
-    model.load_state_dict(torch.load('../output/pretrain_relative_model{}_n{}_{}_best'.format(SEQ_LEN, n_layers, dataset)))
+    model.load_state_dict(torch.load('../output/pretrain_encoder_model{}_n{}_{}'.format(SEQ_LEN, n_layers, dataset)))
 
     # load_path = '../output/model{}_{}_{}_scratch_best'.format(SEQ_LEN, n_layers, dataset)
     # model.load_state_dict(torch.load(load_path))
@@ -593,7 +593,7 @@ def evaluate_pretraining(dataset='TUSZ'):
         plt.subplot(212)
         sns.heatmap(tokens.detach().squeeze().numpy().transpose(), cmap="magma_r")
         # sns.heatmap(activation['self_attn'].squeeze().numpy().transpose(), cmap="magma_r")
-        print(outputs, outputs.shape)
+        print("output: ", outputs.detach().item())
 
         fig, axes = plt.subplots(n_layers, 3, figsize=(12, 6))
         # fig, axes = plt.subplots(n_layers, n_heads*2, figsize=(12, 6))
@@ -606,10 +606,8 @@ def evaluate_pretraining(dataset='TUSZ'):
             K = torch.einsum('tbf,hfa->bhta', x_in, k)
             V = torch.einsum('tbf,hfa->bhta', x_in, v)
             attn = torch.einsum('bhqa,bhka->bhqk', Q, K).squeeze()
-            print(Q.shape, K.shape, V.shape)
-            print(attn.shape)
 
-            res_att_mat = torch.max(attn, dim=0)[0]
+            res_att_mat = torch.mean(attn, dim=0)
             res_att_mat = res_att_mat + torch.eye(res_att_mat.shape[0])
             res_att_mat = res_att_mat / res_att_mat.sum(axis=-1)[..., None]
             print(res_att_mat.shape)
@@ -650,8 +648,6 @@ def evaluate_pretraining(dataset='TUSZ'):
                 #     att[row, : ] = (att[row, : ] - torch.mean(att[row, :])) / torch.std(att[row, :])
                 # att_softmax = torch.mean(attn, dim=0)
                 # attn_all[head, :, :] = att_softmax
-
-                print("layer {}, head {}".format(l, im), attn_rollout.shape)
                 axes[l, idx].plot(attn_rollout[im, :].detach().numpy())
             # print(attn_rollout.shape)
             # important_index = [240, -1]
@@ -753,6 +749,6 @@ if __name__ == '__main__':
     # pretrain("TUSZ")
     # evaluate()
     # train_scratch(dataset="TUSZ")
-    # evaluate_pretraining()
-    finetune()
+    evaluate_pretraining()
+    # finetune()
     # visualize_model()

@@ -2,7 +2,7 @@ from torch import nn, Tensor
 import torch
 import math
 import numpy as np
-from torch.nn import TransformerEncoder
+from torch.nn import TransformerEncoder, TransformerEncoderLayer
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.data.sampler import Sampler
 import torch.nn.functional as F
@@ -26,31 +26,36 @@ class BioTransformer(nn.Module):
         self.seq_len = seq_len
 
         self.roi_length = torch.tensor([60, 30, 0])
-        encoder_layers = TransformerEncoderLayer(d_model, n_heads, d_hid)
+        encoder_layers = TransformerEncoderLayer_(d_model, n_heads, d_hid)
         self.transformer_encoder = TransformerEncoder(encoder_layers, n_layers)
-        self.encoder = nn.Linear(d_feature, d_model)
+        # self.encoder = nn.Linear(d_feature, d_model)
         # self.pos_encoder = PositionalEncoding(d_model, dropout=0.1, max_len=seq_len, segment_length=self.roi_length)
         self.decoder = nn.Linear(d_model, n_out)
         # self.sigmoid = nn.Sigmoid()
 
         self.cls_token = nn.Parameter(torch.rand(1, 1, d_model))
         self.sep_token = nn.Parameter(torch.rand(1, 1, d_model))
+        self.segment_embedding = nn.Parameter(torch.rand(10, 1, d_model))
 
         self.init_weights()
 
     def init_weights(self) -> None:
         initrange = 0.1
-        self.encoder.weight.data.uniform_(-initrange, initrange)
+        # self.encoder.weight.data.uniform_(-initrange, initrange)
         self.decoder.bias.data.zero_()
         self.decoder.weight.data.uniform_(-initrange, initrange)
 
     def forward(self, features):
         c, n, h = features.shape
-        src = self.encoder(features) #* math.sqrt(self.d_model)
-        tokens = src[:SEQ_LEN - self.roi_length[0], :, :]
+        src = torch.cat((features, torch.zeros((c,n,self.d_model - h), device=self.device)), dim=2)
+        # src = self.encoder(features) #* math.sqrt(self.d_model)
+        segment0 = self.segment_embedding[:1,:,:].repeat(SEQ_LEN - self.roi_length[0], n, 1)
+        tokens = src[:SEQ_LEN - self.roi_length[0], :, :] + segment0
         for i in range(len(self.roi_length) - 1):
+            segment_i = self.segment_embedding[i:i+1,:,:].repeat(self.roi_length[i] - self.roi_length[i+1], n, 1)
             tokens = torch.cat((tokens, self.sep_token.repeat(1, n, 1),
-                                src[SEQ_LEN - self.roi_length[i]: SEQ_LEN - self.roi_length[i+1], :, :]), dim=0)
+                                src[SEQ_LEN - self.roi_length[i]: SEQ_LEN - self.roi_length[i+1], :, :] + segment_i),
+                               dim=0)
 
         tokens = torch.cat((tokens, self.cls_token.repeat(1, n, 1)), dim=0)
         # tokens = self.pos_encoder(tokens)
@@ -223,7 +228,7 @@ class PatientDiscriminatorEvaluationDataset(Dataset):
         return sample
 
 
-class TransformerEncoderLayer(nn.Module):
+class TransformerEncoderLayer_(nn.Module):
     # Adapted from pytorch source
     r"""TransformerEncoderLayer is made up of self-attn and feedforward network.
     This standard encoder layer is based on the paper "Attention Is All You Need".
@@ -245,7 +250,7 @@ class TransformerEncoderLayer(nn.Module):
     """
 
     def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1, relative_positional=True, relative_positional_distance=100):
-        super(TransformerEncoderLayer, self).__init__()
+        super(TransformerEncoderLayer_, self).__init__()
         self.self_attn = MultiHeadAttention(d_model, nhead, dropout=dropout, relative_positional=relative_positional, relative_positional_distance=relative_positional_distance)
         # Implementation of Feedforward model
         self.linear1 = nn.Linear(d_model, dim_feedforward)
