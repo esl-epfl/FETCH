@@ -1,5 +1,6 @@
+import matplotlib.pyplot as plt
 import numpy as np
-import scipy.io
+import scipy.io, scipy.integrate
 import os
 import pickle
 # from eglass import calculateMLfeatures
@@ -14,8 +15,15 @@ def zero_crossings(arr):
     """Returns the positions of zero-crossings in the derivative of an array, as a binary vector"""
     return np.diff(np.sign(np.diff(arr))) != 0
 
-def calculateOtherMLfeatures_oneCh(X):
-    numFeat = 56 #54 from Sopic2018 and LL and meanAmpl
+
+def bandpower(f, Pxx, fmin, fmax):
+    ind_min = np.argmax(f > fmin) - 1
+    ind_max = np.argmax(f > fmax) - 1
+    return scipy.integrate.trapz(Pxx[ind_min: ind_max + 1], f[ind_min: ind_max + 1])
+
+
+def calculateOtherMLfeatures_oneCh(X, fs):
+    numFeat = 6 #54 from Sopic2018 and LL and meanAmpl
     lenSig= len(X)
     segLenIndx = int(4 * fs)  # length of EEG segments in samples
     slidWindStepIndx = int(1 * fs)  # step of slidin window to extract segments in samples
@@ -24,11 +32,15 @@ def calculateOtherMLfeatures_oneCh(X):
     featureValues=np.zeros((len(index), numFeat))
     for i in range(len(index)):
         sig = X[index[i]:index[i] + segLenIndx]
-        feat54 = calculateMLfeatures(sig, fs)
+        f, Pxx = scipy.signal.periodogram(sig, fs=fs)
+        p_delta = bandpower(f, Pxx, 0.5, 4)
+        p_theta = bandpower(f, Pxx, 4, 8)
+        p_alfa = bandpower(f, Pxx, 8, 13)
+        p_beta = bandpower(f, Pxx, 13, 30)
         meanAmpl = np.mean(np.abs(sig))
         LL = np.mean(np.abs(np.diff(sig)))
-        featureValues[i, :] = np.hstack((meanAmpl, LL, feat54))
-    return (featureValues)
+        featureValues[i, :] = np.hstack((meanAmpl, LL, p_delta, p_theta, p_alfa, p_beta))
+    return featureValues
 
 
 def calculateMovingAvrgMeanWithUndersampling_v2(data, winLen, winStep):
@@ -156,32 +168,41 @@ def main():
 
         # zeroCrossStandard = np.zeros((length, numCh))
         # zeroCrossApprox = np.zeros((length, numCh))
-        zeroCrossFeaturesAll = np.zeros((length, num_feat * numCh))
+        # zeroCrossFeaturesAll = np.zeros((length, num_feat * numCh))
 
         for ch in range(numCh):
             sigFilt=allsigFilt[ch, :(allsigFilt.shape[1] // fs)*fs]
 
-            # featOther = calculateOtherMLfeatures_oneCh(np.copy(sigFilt))
-            # if (ch == 0):
-            #     AllFeatures = featOther
-            # else:
-            #     AllFeatures = np.hstack((AllFeatures, featOther))
+            featOther = calculateOtherMLfeatures_oneCh(np.copy(sigFilt), fs)
+            if (ch == 0):
+                AllFeatures = featOther
+            else:
+                AllFeatures = np.hstack((AllFeatures, featOther))
 
-            x = np.convolve(zero_crossings(sigFilt), np.ones(fs), mode='same')
-            zeroCrossStandard = calculateMovingAvrgMeanWithUndersampling_v2(x, fs * 4, fs)
-            zeroCrossFeaturesAll[:, num_feat * ch] = zeroCrossStandard
-            for EPSthrIndx, EPSthr in enumerate(EPS_thresh_arr):
-                sigApprox = polygonal_approx(sigFilt, epsilon=EPSthr)
-                sigApproxInterp = np.interp(np.arange(len(sigFilt)), sigApprox, sigFilt[sigApprox])
-                x = np.convolve(zero_crossings(sigApproxInterp), np.ones(fs), mode='same')
-                zeroCrossApprox = calculateMovingAvrgMeanWithUndersampling_v2(x, fs *4 , fs)
-                zeroCrossFeaturesAll[:, num_feat * ch + EPSthrIndx + 1] = zeroCrossApprox
-        with open('../TUSZ_zc/{}/{}/{}_zc.pickle'.format(TUSZ_folder, pat_num, filename.split('/')[-1]), 'wb') as zc_file:
-            pickle.dump(zeroCrossFeaturesAll, zc_file)
+            # x = np.convolve(zero_crossings(sigFilt), np.ones(fs), mode='same')
+            # zeroCrossStandard = calculateMovingAvrgMeanWithUndersampling_v2(x, fs * 4, fs)
+            # zeroCrossFeaturesAll[:, num_feat * ch] = zeroCrossStandard
+            # for EPSthrIndx, EPSthr in enumerate(EPS_thresh_arr):
+            #     sigApprox = polygonal_approx(sigFilt, epsilon=EPSthr)
+            #     sigApproxInterp = np.interp(np.arange(len(sigFilt)), sigApprox, sigFilt[sigApprox])
+            #     x = np.convolve(zero_crossings(sigApproxInterp), np.ones(fs), mode='same')
+            #     zeroCrossApprox = calculateMovingAvrgMeanWithUndersampling_v2(x, fs *4 , fs)
+            #     zeroCrossFeaturesAll[:, num_feat * ch + EPSthrIndx + 1] = zeroCrossApprox
+        with open('../input/TUSZ_zc/{}/{}/{}_band_mean_ll.pickle'.format(TUSZ_folder, pat_num, filename.split('/')[-1]), 'wb') as zc_file:
+            pickle.dump(AllFeatures, zc_file)
     # print(filename_fs_dict)
     # with open('../TUSZ_zc/fs.pickle', 'wb') as zc_file:
     #     pickle.dump(filename_fs_dict, zc_file)
 
 
+def visualize():
+    with open('../input/TUSZ_zc/train/02_tcp_le/000/00000002_s004_t000.edf_band_mean_ll.pickle', 'rb') as zc_file:
+        data = pickle.load(zc_file)
+        print(data.shape)
+        plt.imshow(data)
+        plt.show()
+
+
 if __name__ == '__main__':
     main()
+    # visualize()
