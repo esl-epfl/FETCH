@@ -18,6 +18,7 @@ import torch.nn.functional as F
 from sklearn.metrics import confusion_matrix, f1_score, roc_auc_score
 from utils.BioT import SEQ_LEN, SEGMENT, ROI
 from utils.params import dataset_parameter
+from utils.metrics import thresh_max_f1
 
 
 def get_data(pretrain_mode=False, dataset='TUSZ'):
@@ -445,32 +446,33 @@ def print_results(conf):
 
 
 def evaluate(dataset="TUSZ"):
-    d_feature = 126 if dataset == "TUSZ" else 144
-    d_model = 512
-    n_heads = 8
+    d_feature = 126*2 if dataset == "TUSZ" else 144
+    d_model = 256
+    n_heads = 4
     d_hid = 4 * d_model
     seq_len = SEQ_LEN + 3
     segment = SEGMENT
-    n_layers = 8
+    n_layers = 4
     n_out = 1
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print('device : ', device)
     model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len,
                            n_layers=n_layers,
                            n_out=n_out, device=device, segments=segment).to(device)
-    load_path = '../output/model{}_{}_{}_scratch_relative_best'.format(SEQ_LEN, n_layers, dataset)
+    load_path = '../output/model{}_{}_{}_scratch_bandpower'.format(SEQ_LEN, n_layers, dataset)
     model.load_state_dict(torch.load(load_path))
 
     print(model)
 
     X, labels, valid_labels, _, sample_time, _ = get_data(pretrain_mode=False, dataset="TUSZ")
-    X_test = X["test"]
-    Y = labels["test"]
-    sample_time_test = sample_time["test"]
+    mode = "test"
+    X_test = X[mode]
+    Y = labels[mode]
+    sample_time_test = sample_time[mode]
 
     test_set = Epilepsy60Dataset(torch.from_numpy(X_test).float(), torch.from_numpy(Y).long(),
                                  torch.from_numpy(sample_time_test).long())
-    test_sampler = EvaluateSampler(torch.from_numpy(valid_labels['test']).int(), overlap=1)
+    test_sampler = EvaluateSampler(torch.from_numpy(valid_labels[mode]).int(), overlap=1)
     test_loader = DataLoader(test_set, batch_size=32, shuffle=False, sampler=test_sampler)
 
     model.eval()
@@ -487,40 +489,23 @@ def evaluate(dataset="TUSZ"):
             # print('output shape: {}'.format(outputs.shape))
             # the class with the highest energy is what we choose as prediction
             # _, predicted = torch.max(outputs.data, 1)
-            predicted = (outputs > 0.5) * 1.0
+            predicted = outputs
             # print('predicted: {}'.format(predicted))
             test_predict += predicted.tolist()
             test_labels += y.view(-1, ).tolist()
 
-            # for i in range(len(predicted)):
-            #     if int(predicted.tolist()[i]) ==0 and int( y.view(-1, ).tolist()[i]) == 1:
-            #         plt.figure(figsize=(12,12))
-            #         plt.imshow(x[:,i,:].detach().cpu().numpy().transpose())
-            #         plt.title('FN')
-            #         plt.savefig('../output/figures/FP_FN/{}.png'.format(fig_cnt))
-            #         plt.close()
-            #         fig_cnt+=1
-            #     elif int(predicted.tolist()[i]) == 1 and int( y.view(-1, ).tolist()[i]) == 0:
-            #         plt.figure(figsize=(12,12))
-            #         plt.imshow(x[:,i,:].detach().cpu().numpy().transpose())
-            #         plt.title('FP')
-            #         plt.savefig('../output/figures/FP_FN/{}.png'.format(fig_cnt))
-            #         plt.close()
-            #         fig_cnt+=1
-
-
-            # print('labels: {}'.format(labels.view(-1,)))
-            # correct += (predicted == labels.view(-1,)).sum().item()
-            # print('(predicted == labels): {}'.format((predicted == labels.view(-1,))))
-            # print('correct :{}'.format( (predicted == labels.view(-1,)).sum().item()))
-
-    # print(f'Accuracy of the network on the test data: {100 * correct // total} %')
+    if mode == "val":
+        best_thresh = thresh_max_f1(y_true=test_labels, y_prob=test_predict)
+    else:
+        best_thresh = 0.5938
+    print("Best Threshold: {}".format(best_thresh))
+    test_predict = (np.array(test_predict) > best_thresh) * 1.0
     conf = confusion_matrix(test_labels, test_predict)
     print_results(conf)
     print("F1 score: ", f1_score(test_labels, test_predict))
 
 
-def evaluate_pretraining(dataset='TUSZ'):
+def evaluate_pretraining(dataset='TUSZ', visualization=False):
     activation = {}
 
     def get_activation(name):
@@ -532,17 +517,17 @@ def evaluate_pretraining(dataset='TUSZ'):
 
         return hook
 
-    d_feature = 126 if dataset == "TUSZ" else 144
-    d_model = 128
-    n_heads = 2
+    d_feature = 126*2 if dataset == "TUSZ" else 144
+    d_model = 256
+    n_heads = 4
     d_hid = 4 * d_model
     seq_len = SEQ_LEN + 3
     segment = SEGMENT
     n_layers = 4
     n_out = 1
     torch.random.manual_seed(62)
-    # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    device = torch.device('cpu')
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    # device = torch.device('cpu')
     print('device : ', device)
     model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len,
                            n_layers=n_layers,
@@ -557,156 +542,74 @@ def evaluate_pretraining(dataset='TUSZ'):
                                             sample_time['train'])
     sampler = EvaluateSampler(torch.from_numpy(valid_labels['train']).int(), overlap=60)
     train_loader = DataLoader(train_set, batch_size=1, sampler=sampler)
-    model.load_state_dict(torch.load('../output/pretrain_encoder_model{}_n{}_{}'.format(SEQ_LEN, n_layers, dataset)))
+    model.load_state_dict(torch.load('../output/pretrain_bandpower_model{}_n{}_{}_best'.format(SEQ_LEN, n_layers, dataset)))
 
-    # load_path = '../output/model{}_{}_{}_scratch_best'.format(SEQ_LEN, n_layers, dataset)
-    # model.load_state_dict(torch.load(load_path))
-    #
-    # X, labels, valid_labels, _, sample_time, _ = get_data(pretrain_mode=False, dataset="TUSZ")
-    # X_test = X["test"]
-    # Y = labels["test"]
-    # sample_time_test = sample_time["test"]
-    #
-    # test_set = Epilepsy60Dataset(torch.from_numpy(X_test).float(), torch.from_numpy(Y).long(),
-    #                              torch.from_numpy(sample_time_test).long())
-    # test_sampler = EvaluateSampler(torch.from_numpy(valid_labels['test']).int(), overlap=1)
-    # test_loader = DataLoader(test_set, batch_size=1, shuffle=False, sampler=test_sampler)
+    validation_set = PatientDiscriminatorEvaluationDataset(torch.from_numpy(X["val"]).float(), pat_start_end['val'],
+                                                           torch.from_numpy(minute_labels['val']).int(),
+                                                           sample_time['val'])
+    validation_loader = DataLoader(validation_set, batch_size=16, num_workers=4, shuffle=True)
 
     print(model)
     for name, param in model.named_parameters():
         if param.requires_grad:
             print(name, param.data.shape)
 
-    hook1 = model.encoder.register_forward_hook(get_activation('layer0_in'))
-    for i in range(1, n_layers):
-        model.transformer_encoder.layers[i-1].register_forward_hook(get_activation('layer{}_in'.format(i)))
-    # model.transformer_encoder.layers[0].self_attn.register_forward_hook(get_activation('self_attn'))
-    # model.transformer_encoder.layers[0].norm1.register_forward_hook(get_activation('norm1'))
-    # model.encoder.register_forward_hook(get_activation('encoder'))
+    if visualization:
+        for i in range(1, n_layers):
+            model.transformer_encoder.layers[i-1].register_forward_hook(get_activation('layer{}_in'.format(i)))
 
-    it = iter(train_loader)
-    print(len(train_loader))
-    mmd_label_df = pd.DataFrame(columns=['label', 'mmd'])
-    for iteration in range(len(train_loader) - 1):
-        batch = next(it)
-        x, y = batch['x'], batch['y']
-        x, y = x.to(device), y.to(device)
-        x = torch.transpose(x, 0, 1)
-        outputs = model(x)[0][-1, :, :]
-        tokens = model(x)[1]
-        plt.subplots(2, 1, figsize=(6, 12))
-        plt.subplot(211)
-        plt.title("{}, {}".format(y.detach().item(), batch['len'].detach()))
-        sns.heatmap(x.squeeze().numpy().transpose(), cmap="magma_r")
-        plt.subplot(212)
-        sns.heatmap(tokens.detach().squeeze().numpy().transpose(), cmap="magma_r")
-        # sns.heatmap(activation['self_attn'].squeeze().numpy().transpose(), cmap="magma_r")
-        print("output: ", outputs.detach().item())
-
-        fig, axes = plt.subplots(n_layers, 3, figsize=(12, 6))
-        # fig, axes = plt.subplots(n_layers, n_heads*2, figsize=(12, 6))
-
-        for l in range(n_layers):
-            x_in = tokens
-            in_proj_weight = model.transformer_encoder.layers[l].self_attn
-            q, k, v = in_proj_weight.w_q, in_proj_weight.w_k, in_proj_weight.w_v
-            Q = torch.einsum('tbf,hfa->bhta', x_in, q)
-            K = torch.einsum('tbf,hfa->bhta', x_in, k)
-            V = torch.einsum('tbf,hfa->bhta', x_in, v)
-            attn = torch.einsum('bhqa,bhka->bhqk', Q, K).squeeze()
-
-            res_att_mat = torch.mean(attn, dim=0)
-            res_att_mat = res_att_mat + torch.eye(res_att_mat.shape[0])
-            res_att_mat = res_att_mat / res_att_mat.sum(axis=-1)[..., None]
-            print(res_att_mat.shape)
-
-
-            # for h in range(n_heads):
-            #     axes[l, 2*h].plot(attn[h,-1,:-1].detach().numpy())
-            #     axes[l, 2*h+1].plot(attn[h,240,:240].detach().numpy())
-
-            # att = torch.matmul(Q, torch.transpose(K, -2, -1))
-            # print("Attention: ", att.shape)
-            # attn_all = F.normalize(attn / 8.0, dim=-1)
-            # attn_all = attn
-            # scores = torch.matmul(attn_all, V)
-            # print("Scores: ", scores.shape)
-            # concat = scores.transpose(0, 1).contiguous().view(-1, d_model)
-            # print("Concatenate: ", concat.shape)
-            # mha = torch.matmul(concat, out_proj_weight) + out_proj_bias
-            # print("MHA: ", mha.shape)
-            #
-            # mha = activation['self_attn'].squeeze()
-            # print("MHA : ", mha.shape)
-            # add_norm = x_in + norm_alpha *\
-            #            (mha - mha.mean(dim=-1, keepdim=True)) / (mha.std(dim=-1, keepdim=True) + 1e-5) + norm_bias
-            # print("Add/Norm: ", add_norm.shape)
-            # plt.subplots(2, 1, figsize=(6, 12))
-            # plt.subplot(211)
-            # plt.title("Norm in Layer ".format(y.detach().item(), batch['len'].detach()))
-            # sns.heatmap(concat.detach().squeeze().numpy().transpose(), cmap="magma_r")
-            # plt.subplot(212)
-            # sns.heatmap(add_norm.detach().numpy().transpose(), cmap="magma_r")
-            # for h in range(n_heads):
-            #     axes[l, h].imshow(attn_all[h, :, :].detach().numpy())
-            attn_rollout = torch.matmul(attn_rollout, res_att_mat) if l != 0 else res_att_mat
-            important_index = [240, 271, 302]
-            for idx, im in enumerate(important_index):
-                # for row in range(seq_len):
-                #     att[row, : ] = (att[row, : ] - torch.mean(att[row, :])) / torch.std(att[row, :])
-                # att_softmax = torch.mean(attn, dim=0)
-                # attn_all[head, :, :] = att_softmax
-                axes[l, idx].plot(attn_rollout[im, :].detach().numpy())
-            # print(attn_rollout.shape)
-            # important_index = [240, -1]
-            # for idx, im in enumerate(important_index):
-            #     attn_rollout[im, im] = 0
-            #     axes[l, idx].plot(attn_rollout[im, :].detach().numpy())
-
-        plt.show()
-
-
-    exit()
-
-
-    model.eval()
     test_predict = []
     test_labels = []
-    # randperm_seg = torch.randperm(SEGMENT)
-    # randperm_roi = torch.randperm(SEQ_LEN)
-    # since we're not training, we don't need to calculate the gradients for our outputs
+    model.eval()
     with torch.no_grad():
-        for batch in tqdm(train_loader, position=0, leave=True):
+        for i, batch in enumerate(tqdm(validation_loader, position=0, leave=True)):
             x, y = batch['x'], batch['y']
-            # x[:, :SEGMENT, :] = x[:, randperm_seg, :]
             x, y = x.to(device), y.to(device)
             x = torch.transpose(x, 0, 1)
-            y_hat = model(x)[-1, :, 0]
-            predicted = y_hat.data
-            # print('predicted: {}'.format(predicted))
-            test_predict += predicted.tolist()
+            outputs = model(x)[0][-1, :, 0]
+            tokens = model(x)[1]
+
+            test_predict += outputs.tolist()
             test_labels += y.view(-1, ).tolist()
 
-            same_sample = np.where(y.cpu().numpy() == 0)[0][0]
-            diff_sample = np.where(y.cpu().numpy() == 1)[0][0]
-            #
-            # print(activation['pos_encoder'].shape)
-            #
-            plt.figure(figsize=(6,6))
-            sns.heatmap(activation['encoder'][:,same_sample,:].cpu().numpy().transpose(), cmap="magma_r")
-            plt.figure(figsize=(6,6))
-            sns.heatmap(activation['pos_encoder'][:,same_sample,:].cpu().numpy().transpose(),  cmap="magma_r")
-            # sns.heatmap((activation['pos_encoder'][-61:-1,same_sample,:]- activation['encoder'][:,same_sample,:]  * math.sqrt(512)).cpu().numpy().transpose(),  cmap="magma_r")
+            if visualization:
+                plt.subplots(2, 1, figsize=(6, 12))
+                plt.subplot(211)
+                plt.title("{}, {}".format(y.detach().item(), batch['len'].detach()))
+                sns.heatmap(x.squeeze().numpy().transpose(), cmap="magma_r")
+                plt.subplot(212)
+                sns.heatmap(tokens.detach().squeeze().numpy().transpose(), cmap="magma_r")
+                fig, axes = plt.subplots(n_layers, 3, figsize=(12, 6))
 
-            plt.figure(figsize=(3, 6))
-            sns.heatmap(activation['encoder'][:, diff_sample, :].cpu().numpy().transpose())
-            plt.figure(figsize=(15, 6))
-            sns.heatmap(activation['pos_encoder'][:, diff_sample, :].cpu().numpy().transpose())
-            plt.show()
-            # return
+                for l in range(n_layers):
+                    x_in = tokens
+                    in_proj_weight = model.transformer_encoder.layers[l].self_attn
+                    q, k, v = in_proj_weight.w_q, in_proj_weight.w_k, in_proj_weight.w_v
+                    Q = torch.einsum('tbf,hfa->bhta', x_in, q)
+                    K = torch.einsum('tbf,hfa->bhta', x_in, k)
+                    V = torch.einsum('tbf,hfa->bhta', x_in, v)
+                    attn = torch.einsum('bhqa,bhka->bhqk', Q, K).squeeze()
 
+                    res_att_mat = torch.mean(attn, dim=0)
+                    res_att_mat = res_att_mat + torch.eye(res_att_mat.shape[0])
+                    res_att_mat = res_att_mat / res_att_mat.sum(axis=-1)[..., None]
+                    print(res_att_mat.shape)
+
+                    attn_rollout = torch.matmul(attn_rollout, res_att_mat) if l != 0 else res_att_mat
+                    important_index = [240, 271, 302]
+                    for idx, im in enumerate(important_index):
+                        axes[l, idx].plot(attn_rollout[im, :].detach().numpy())
+
+                plt.show()
+    print(test_labels)
+    print(test_predict)
+
+    best_thresh = thresh_max_f1(y_true=test_labels, y_prob=test_predict)
+    print("Best Threshold: {}".format(best_thresh))
+    test_predict = (np.array(test_predict) > best_thresh) * 1.0
     conf = confusion_matrix(test_labels, test_predict)
     print_results(conf)
+    print("F1 score: ", f1_score(test_labels, test_predict))
 
 
 def visualize_model():
@@ -753,10 +656,8 @@ def visualize_model():
 
 
 if __name__ == '__main__':
-    # train()
     # pretrain("TUSZ")
     # evaluate()
-    train_scratch(dataset="TUSZ")
+    # train_scratch(dataset="TUSZ")
     # evaluate_pretraining()
-    # finetune()
-    # visualize_model()
+    finetune()
