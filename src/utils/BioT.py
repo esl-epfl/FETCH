@@ -30,20 +30,24 @@ class BioTransformer(nn.Module):
         self.transformer_encoder = TransformerEncoder(encoder_layers, n_layers)
         # self.encoder = nn.Linear(d_feature, d_model)
         # self.pos_encoder = PositionalEncoding(d_model, dropout=0.1, max_len=seq_len, segment_length=self.roi_length)
-        self.decoder = nn.Linear(d_model, n_out)
+        self.decoder1 = nn.Linear(d_model, 64)
+        self.decoder2 = nn.Linear(64, n_out)
+
         # self.sigmoid = nn.Sigmoid()
 
         self.cls_token = nn.Parameter(torch.rand(1, 1, d_model))
         self.sep_token = nn.Parameter(torch.rand(1, 1, d_model))
-        self.segment_embedding = nn.Parameter(torch.rand(10, 1, d_model))
+        self.segment_embedding = nn.Parameter(torch.rand(7, 1, d_model))
 
         self.init_weights()
 
     def init_weights(self) -> None:
         initrange = 0.1
         # self.encoder.weight.data.uniform_(-initrange, initrange)
-        self.decoder.bias.data.zero_()
-        self.decoder.weight.data.uniform_(-initrange, initrange)
+        self.decoder1.bias.data.zero_()
+        self.decoder1.bias.data.zero_()
+        self.decoder2.weight.data.uniform_(-initrange, initrange)
+        self.decoder2.weight.data.uniform_(-initrange, initrange)
 
     def forward(self, features):
         c, n, h = features.shape
@@ -60,7 +64,8 @@ class BioTransformer(nn.Module):
         tokens = torch.cat((tokens, self.cls_token.repeat(1, n, 1)), dim=0)
         # tokens = self.pos_encoder(tokens)
         output = self.transformer_encoder(tokens)
-        output = self.decoder(output)
+        output = self.decoder1(output)
+        output = self.decoder2(F.relu(output))
         # output = self.sigmoid(output)
         return output
 

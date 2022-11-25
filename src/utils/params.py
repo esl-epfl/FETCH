@@ -68,13 +68,15 @@ EEG_channels_LE = ['EEG FP1-LE', 'EEG FP2-LE', 'EEG F3-LE', 'EEG F4-LE', 'EEG C3
 
 dataset_parameter = {"TUSZ": {
     "pretrain": {
-        "feature_size": 126,
+        "band_feature_size": 126,
+        "zc_feature_size": 126,
         "train_len": 2683795,
         "val_len": 8292,
         "test_len": 537670
     },
     "scratch": {
-        "feature_size": 126,
+        "band_feature_size": 126,
+        "zc_feature_size": 126,
         "train_len": 2356547,
         "val_len": 335540,
         "test_len": 537670
