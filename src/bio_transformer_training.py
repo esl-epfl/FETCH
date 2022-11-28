@@ -113,7 +113,7 @@ def get_data(pretrain_mode=False, dataset='TUSZ'):
                     print("Error in shape of {}: {} and {}\n".format(t_file, data.shape, y.shape))
             pat_num = t_file.split('/')[-1].split('_')[0] if dataset == "TUSZ" else int(t_file.split('_')[1]) - 1
 
-            valid_start = labels[mode].shape[0] + ROI - 1
+            valid_start = labels[mode].shape[0] + 90 - 1
             if mode == 'test': valid_start = valid_start - 4
             valid_end = labels[mode].shape[0] + y.shape[0]
             minute_labels[mode] = np.concatenate((minute_labels[mode], np.arange(start=valid_start, stop=valid_end, step=ROI)))
@@ -140,7 +140,7 @@ def get_data(pretrain_mode=False, dataset='TUSZ'):
     return X, labels, minute_labels, pat_start_end, sample_time, valid_labels
 
 
-def train(model, device, save_path: str, learning_rate: float = 1e-5):
+def train(model, device, save_path: str, learning_rate: float = 1e-5, params_lr=None):
     X, labels, valid_labels, _, sample_time, _ = get_data(pretrain_mode=False, dataset='TUSZ')
 
     # %%
@@ -182,20 +182,10 @@ def train(model, device, save_path: str, learning_rate: float = 1e-5):
                                   torch.from_numpy(sample_time_train).long())
     sampler = ImbalancedDataSampler(torch.from_numpy(seizure_indices).long(),
                                     torch.from_numpy(non_seizure_indices).long(),
-                                    torch.from_numpy(post_ictal_indices).long(), overlap=20)
-    train_loader = DataLoader(train_set, batch_size=128, sampler=sampler, num_workers=4)
-
-    # classes = {0: 0, 1: 0}
-
-    #     print(sample['y'])
-    # for j in range(16):
-    # idx = sample['idx'][j]
-    # if np.isin(idx, post_ictal_indices, assume_unique=True):
-    #     print(idx, "Post ictal", sample['y'][j])
-    # elif np.isin(idx, non_seizure_indices, assume_unique=True):
-    #     print(idx, "non ictal", sample['y'][j])
-    # else:
-    #     print(idx, "ictal", sample['y'][j])
+                                    torch.from_numpy(post_ictal_indices).long(),
+                                    post_non_ratio=0.2,
+                                    overlap=20)
+    train_loader = DataLoader(train_set, batch_size=32, sampler=sampler, num_workers=4)
 
     val_set = Epilepsy60Dataset(torch.from_numpy(X_val).float(), torch.from_numpy(Y_val).float(),
                                 torch.from_numpy(sample_time_val).long())
@@ -203,24 +193,27 @@ def train(model, device, save_path: str, learning_rate: float = 1e-5):
     val_loader = DataLoader(val_set, shuffle=False, batch_size=16, sampler=val_sampler)
 
     # Training loop
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
-    lr_sched = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.95)
-
-
-    def set_lr(new_lr):
-        for param_group in optimizer.param_groups:
-            param_group['lr'] = new_lr
+    if params_lr==None:
+        optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
+    else:
+        optimizer = torch.optim.AdamW(params_lr, lr=learning_rate, weight_decay=1e-4)
+    lr_sched = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.97)
 
     target_lr = learning_rate
 
+    def set_lr(new_lr):
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = (new_lr/target_lr) * param_group['initial_lr']
+
     def schedule_lr(iteration):
-        if iteration <= 2000:
-            set_lr(iteration * target_lr / 2000)
+        if iteration <= 10000:
+            set_lr(iteration * target_lr / 10000)
 
     criterion = BCEWithLogitsLoss()
-    N_EPOCHS = 100
+    N_EPOCHS = 200
     train_loss_list = []
     val_loss_list = []
+    best_f1 = {"value": 0, "epoch": 0, "val_loss": 0}
 
     for epoch in tqdm(range(N_EPOCHS), desc="Training"):
         model.train(True)  # turn on train mode
@@ -241,26 +234,42 @@ def train(model, device, save_path: str, learning_rate: float = 1e-5):
             optimizer.step()
         model.eval()
         with torch.no_grad():
+            test_predict = []
+            test_labels = []
             running_vloss = 0.0
             for i, batch in enumerate(val_loader):
                 x, y = batch['x'], batch['y']
                 x, y = x.to(device), y.to(device)
                 x = torch.transpose(x, 0, 1)
                 voutputs = model(x)
+                test_predict += voutputs[-1, :, 0].tolist()
+                test_labels += y.view(-1, ).tolist()
                 vloss = criterion(voutputs[-1, :, 0], y.view(-1, ))
                 running_vloss += vloss.detach().cpu().item()
 
             avg_vloss = running_vloss / len(val_loader)
-            print('LOSS valid {}'.format(avg_vloss))
+
+            best_thresh = thresh_max_f1(y_true=test_labels, y_prob=test_predict)
+            test_predict = (np.array(test_predict) > best_thresh) * 1.0
+            f1_val = f1_score(test_labels, test_predict)
+            print("Best Threshold: {:.2f} -> F1-score: {:.3f}\nValidation LOSS: {:.2f}".format(best_thresh,
+                                                                                               f1_val,
+                                                                                               avg_vloss))
             val_loss_list.append(avg_vloss)
-            if avg_vloss <= np.min(np.array(val_loss_list)):
+            if f1_val > best_f1["value"]:
+                best_f1["value"] = f1_val
+                best_f1["epoch"] = epoch
+                best_f1["val_loss"] = avg_vloss
+                print("BEST F1!")
                 torch.save(model.state_dict(), "{}_best".format(save_path))
 
-            lr_sched.step()
-            lr = lr_sched.get_last_lr()[0]
+        lr_sched.step()
+        lr = lr_sched.get_last_lr()[0]
             #
         print(f"Epoch {epoch + 1}/{N_EPOCHS} Training loss: {train_loss / len(train_loader):.2f} Learning Rate {lr} ")
         train_loss_list.append(train_loss / len(train_loader))
+        if epoch > best_f1["epoch"] + 10 and avg_vloss > best_f1["val_loss"]:
+            break
 
     torch.save(model.state_dict(), save_path)
     print("Validation_loss_list = ", val_loss_list)
@@ -279,14 +288,13 @@ def get_pat_start_end(pat_file_start_end):
 
 def pretrain(dataset):
     X, labels, minute_labels, pat_file_start_end, sample_time, valid_labels = get_data(pretrain_mode=True, dataset=dataset)
-    print(pat_file_start_end)
     d_feature = 252 if dataset == "TUSZ" else 144
     d_model = 256
     n_heads = 4
     d_hid = 4 * d_model
     seq_len = SEQ_LEN + 3
     segment = SEGMENT
-    n_layers = 4
+    n_layers = 12
     n_out = 1
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     # device = torch.device('cpu')
@@ -299,11 +307,9 @@ def pretrain(dataset):
 
     pat_start_end = get_pat_start_end(pat_file_start_end)
 
-    print("Pat Start End: ", pat_start_end)
-
     train_set = PatientDiscriminatorDataset(torch.from_numpy(X_train).float(), pat_start_end['train'], sample_time['train'])
-    sampler = EvaluateSampler(torch.from_numpy(valid_labels['train']).int(), overlap=10)
-    train_loader = DataLoader(train_set, batch_size=512, sampler=sampler)
+    sampler = EvaluateSampler(torch.from_numpy(valid_labels['train']).int(), overlap=20)
+    train_loader = DataLoader(train_set, batch_size=32, sampler=sampler)
 
     validation_set = PatientDiscriminatorEvaluationDataset(torch.from_numpy(X["val"]).float(), pat_start_end['val'],
                                                            torch.from_numpy(minute_labels['val']).int(),
@@ -321,8 +327,8 @@ def pretrain(dataset):
     #         plt.close()
 
     # Training loop
-    learning_rate = 1e-5
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
+    learning_rate = 1e-4
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-3)
     lr_sched = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.95)
 
     def set_lr(new_lr):
@@ -333,14 +339,15 @@ def pretrain(dataset):
 
     def schedule_lr(iteration):
         iteration = iteration + 1
-        if iteration <= 2000:
-            set_lr(iteration * target_lr / 2000)
+        if iteration <= 20000:
+            set_lr(iteration * target_lr / 20000)
 
     criterion = BCEWithLogitsLoss()
     # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.95)
-    N_EPOCHS = 100
+    N_EPOCHS = 200
     val_loss_list = []
-    save_path = '../output/pretrain_bandpower_model{}_n{}_{}'.format(SEQ_LEN, n_layers, dataset)
+    save_path = '../output/pretrain_bandpower1e4_model{}_n{}_{}'.format(SEQ_LEN, n_layers, dataset)
+    best_f1 = {"value": 0, "epoch": 0}
     for epoch in tqdm(range(N_EPOCHS), desc="Training"):
         model.train(True)  # turn on train mode
         train_loss = 0.0
@@ -360,20 +367,34 @@ def pretrain(dataset):
 
         model.eval()
         with torch.no_grad():
+            test_predict = []
+            test_labels = []
             running_vloss = 0.0
             for i, batch in enumerate(validation_loader):
                 x, y = batch['x'], batch['y']
                 x, y = x.to(device), y.to(device)
                 x = torch.transpose(x, 0, 1)
                 voutputs = model(x)
+                test_predict += voutputs[-1, :, 0].tolist()
+                test_labels += y.view(-1, ).tolist()
                 vloss = criterion(voutputs[-1, :, 0], y.view(-1, ))
                 running_vloss += vloss.detach().cpu().item()
 
             avg_vloss = running_vloss / len(validation_loader)
-            print('LOSS valid {}'.format(avg_vloss))
+            best_thresh = thresh_max_f1(y_true=test_labels, y_prob=test_predict)
+            test_predict = (np.array(test_predict) > best_thresh) * 1.0
+            f1_val = f1_score(test_labels, test_predict)
+            print("Best Threshold: {:.2f} -> F1-score: {:.3f}\nValidation LOSS: {:.2f}".format(best_thresh,
+                                                                                               f1_val,
+                                                                                               avg_vloss))
             val_loss_list.append(avg_vloss)
-            if avg_vloss <= np.min(np.array(val_loss_list)):
+            if f1_val > best_f1["value"]:
+                best_f1["value"] = f1_val
+                best_f1["epoch"] = epoch
+                print("BEST F1!")
                 torch.save(model.state_dict(), "{}_best".format(save_path))
+        if epoch > best_f1["epoch"] + 10:
+            break
 
         lr_sched.step()
         lr = lr_sched.get_last_lr()[0]
@@ -390,23 +411,23 @@ def train_scratch(dataset):
     d_hid = 4 * d_model
     seq_len = SEQ_LEN + 3
     segment = SEGMENT
-    n_layers = 4
+    n_layers = 12
     n_out = 1
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print('device : ', device)
     model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len,
                            n_layers=n_layers, n_out=n_out, device=device, segments=segment).to(device)
-    savepath = '../output/model{}_{}_{}_scratch_bandpower_0.001'.format(SEQ_LEN, n_layers, dataset)
-    train(model, device, savepath, learning_rate=1e-3)
+    savepath = '../output/model{}_{}_{}_scratch_bandpower1e4'.format(SEQ_LEN, n_layers, dataset)
+    train(model, device, savepath, learning_rate=1e-4)
 
 
 def finetune():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print('device : ', device)
 
-    d_feature = 126 #144
-    d_model = 512
-    n_heads = 8
+    d_feature = 126 * 2 #144
+    d_model = 256
+    n_heads = 4
     d_hid = 4 * d_model
     seq_len = SEQ_LEN + 5
     segment = SEGMENT
@@ -416,16 +437,24 @@ def finetune():
     model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len,
                            n_layers=n_layers,
                            n_out=n_out, device=device, segments=segment).to(device)
-    model.load_state_dict(torch.load("../output/pretrain_relative_model300_n8_TUSZ"))
+    model.load_state_dict(torch.load("../output/pretrain_bandpower1e4_model300_n{}_TUSZ_best".format(n_layers)), strict=False)
 
-    savepath = '../output/finetuned_relative_model{}_n{}'.format(SEQ_LEN, n_layers)
-    model.decoder.weight.data.uniform_(-0.1, 0.1)
-    model.decoder.bias.data.uniform_(-0.1, 0.1)
-    # model.sep_token.requires_grad = False
-    # model.cls_token.requires_grad = False
-    # model.encoder.weight.requires_grad = False
-    # model.encoder.bias.requires_grad = False
-    # for layer_num in range(n_layers):
+    savepath = '../output/finetuned_bandpower1e4_model{}_n{}'.format(SEQ_LEN, n_layers)
+    lr_init = 1e-5
+    group_params_lr = [
+        # {'params': model.sep_token.parameters(), 'lr': lr_init},
+        # {'params': model.cls_token.parameters(), 'lr': lr_init},
+        {'params': model.transformer_encoder.layers[0].parameters(), 'lr': 2* lr_init},
+        {'params': model.transformer_encoder.layers[1].parameters(), 'lr': 2* lr_init},
+        {'params': model.transformer_encoder.layers[2].parameters(), 'lr': 2* lr_init},
+        {'params': model.transformer_encoder.layers[3].parameters(), 'lr': 2* lr_init},
+        {'params': model.transformer_encoder.layers[4].parameters(), 'lr': 4* lr_init},
+        {'params': model.transformer_encoder.layers[5].parameters(), 'lr': 4* lr_init},
+        {'params': model.transformer_encoder.layers[6].parameters(), 'lr': 4* lr_init},
+        {'params': model.transformer_encoder.layers[7].parameters(), 'lr': 4* lr_init},
+        {'params': model.decoder_finetune.parameters(), 'lr': 5* lr_init},
+    ]
+    # for layer_num in range(n_layers-2):
     #     for param in model.transformer_encoder.layers[layer_num].parameters():
     #         param.requires_grad = False
 
@@ -433,7 +462,7 @@ def finetune():
         if param.requires_grad:
             print(
                 name, param.data.shape)
-    train(model, device, savepath, learning_rate=1e-6)
+    train(model, device, savepath, learning_rate=5e-5, params_lr = group_params_lr)
 
 
 def print_results(conf):
@@ -452,14 +481,15 @@ def evaluate(dataset="TUSZ"):
     d_hid = 4 * d_model
     seq_len = SEQ_LEN + 3
     segment = SEGMENT
-    n_layers = 4
+    n_layers = 12
     n_out = 1
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print('device : ', device)
     model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len,
                            n_layers=n_layers,
                            n_out=n_out, device=device, segments=segment).to(device)
-    load_path = '../output/model{}_{}_{}_scratch_bandpower'.format(SEQ_LEN, n_layers, dataset)
+    load_path = '../output/finetuned_bandpower1e4_model{}_n{}_best'.format(SEQ_LEN, n_layers)
+    # load_path = '../output/model{}_{}_{}_scratch_bandpower1e4'.format(SEQ_LEN, n_layers, dataset)
     model.load_state_dict(torch.load(load_path))
 
     print(model)
@@ -497,7 +527,7 @@ def evaluate(dataset="TUSZ"):
     if mode == "val":
         best_thresh = thresh_max_f1(y_true=test_labels, y_prob=test_predict)
     else:
-        best_thresh = 0.5938
+        best_thresh = -1.0927
     print("Best Threshold: {}".format(best_thresh))
     test_predict = (np.array(test_predict) > best_thresh) * 1.0
     conf = confusion_matrix(test_labels, test_predict)
