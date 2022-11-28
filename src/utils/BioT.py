@@ -25,13 +25,14 @@ class BioTransformer(nn.Module):
         self.device = device
         self.seq_len = seq_len
 
-        self.roi_length = torch.tensor([60, 30, 0])
-        encoder_layers = TransformerEncoderLayer_(d_model, n_heads, d_hid)
+        self.roi_length = torch.tensor([60, 45, 30, 15, 0])
+        encoder_layers = TransformerEncoderLayer_(d_model, n_heads, d_hid, relative_positional_distance=30)
         self.transformer_encoder = TransformerEncoder(encoder_layers, n_layers)
         # self.encoder = nn.Linear(d_feature, d_model)
         # self.pos_encoder = PositionalEncoding(d_model, dropout=0.1, max_len=seq_len, segment_length=self.roi_length)
         self.decoder1 = nn.Linear(d_model, 64)
         self.decoder2 = nn.Linear(64, n_out)
+        self.decoder_finetune = nn.Linear(d_model, n_out)
 
         # self.sigmoid = nn.Sigmoid()
 
@@ -39,15 +40,19 @@ class BioTransformer(nn.Module):
         self.sep_token = nn.Parameter(torch.rand(1, 1, d_model))
         self.segment_embedding = nn.Parameter(torch.rand(7, 1, d_model))
 
+        self.dropout = nn.Dropout(0.3)
+        self.activation = nn.ReLU()
+
         self.init_weights()
 
     def init_weights(self) -> None:
-        initrange = 0.1
+        initrange1 = 0.14
+        initrange2 = 0.3
         # self.encoder.weight.data.uniform_(-initrange, initrange)
         self.decoder1.bias.data.zero_()
         self.decoder1.bias.data.zero_()
-        self.decoder2.weight.data.uniform_(-initrange, initrange)
-        self.decoder2.weight.data.uniform_(-initrange, initrange)
+        self.decoder2.weight.data.uniform_(-initrange1, initrange1)
+        self.decoder2.weight.data.uniform_(-initrange2, initrange2)
 
     def forward(self, features):
         c, n, h = features.shape
@@ -64,8 +69,8 @@ class BioTransformer(nn.Module):
         tokens = torch.cat((tokens, self.cls_token.repeat(1, n, 1)), dim=0)
         # tokens = self.pos_encoder(tokens)
         output = self.transformer_encoder(tokens)
-        output = self.decoder1(output)
-        output = self.decoder2(F.relu(output))
+        output = self.decoder_finetune(output)
+        # output = self.decoder2(self.dropout(self.activation(self.decoder1(output))))
         # output = self.sigmoid(output)
         return output
 
@@ -134,7 +139,6 @@ class ImbalancedDataSampler(Sampler):
         self.post_seizure_chosen_len = int(post_non_ratio * self.num_seizure)
 
     def __iter__(self):
-        print("Sampler Called")
         sampled_non_seizure_indices = torch.randperm(self.num_non_seizure)[:self.num_seizure-self.post_seizure_chosen_len]
         sampled_post_seizure_indices = torch.randperm(self.num_post_seizure)[:self.post_seizure_chosen_len]
 
@@ -167,7 +171,7 @@ class PatientDiscriminatorDataset(Dataset):
         self.pat_start_end = pat_start_end
         self.pat_start = [x[0] for x in pat_start_end]
         self.pats = len(pat_start_end)
-        self.roi_length = torch.tensor([30, 60])
+        self.roi_length = torch.tensor([10, 20, 25, 30, 35, 40, 45, 50, 53, 57, 60, 63, 67, 70, 75, 80, 90])
         self.roi_possible_len = len(self.roi_length)
         self.sample_time = sample_time
 
