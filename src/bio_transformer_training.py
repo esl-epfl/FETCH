@@ -15,7 +15,7 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.optim import SGD, Adam, AdamW
 from tqdm import tqdm
 import torch.nn.functional as F
-from sklearn.metrics import confusion_matrix, f1_score, roc_auc_score
+from sklearn.metrics import confusion_matrix, f1_score, roc_auc_score, accuracy_score, precision_score, recall_score
 from utils.BioT import SEQ_LEN, SEGMENT, ROI
 from utils.params import dataset_parameter
 from utils.metrics import thresh_max_f1
@@ -96,11 +96,13 @@ def get_data(pretrain_mode=False, dataset='TUSZ'):
         for t_file in total_dataset[mode]:
             with open(rootdir + '/{}_band_mean_ll.pickle'.format(t_file), 'rb') as pickle_file:
                 band_data = pickle.load(pickle_file)
+                band_data = np.pad(band_data, ((0,1), (0,0)))
                 X[mode][start_index:start_index + band_data.shape[0], :band_feature_size] = band_data
 
             with open(rootdir + '/{}_zc.pickle'.format(t_file), 'rb') as pickle_file:
                 # print(t_file)
                 data = pickle.load(pickle_file)
+                data = np.pad(data, ((0, 1), (0, 0)))
                 assert data.shape[0] == band_data.shape[0],\
                     "Band power feature length {} is not equal to zero crossing {}".format(data.shape[0], band_data.shape[0])
                 # if pretrain_mode and data.shape[0] < SEQ_LEN:  # very short files
@@ -108,15 +110,17 @@ def get_data(pretrain_mode=False, dataset='TUSZ'):
                 total_len += data.shape[0]
                 X[mode][start_index:start_index + data.shape[0], band_feature_size:] = data
                 start_index += data.shape[0]
-                y = np.zeros(data.shape[0]) if pretrain_mode else df_file_name.loc[t_file, 'labels']
+                y = np.zeros(data.shape[0]) if pretrain_mode else np.pad(df_file_name.loc[t_file, 'labels'], (0,1))
                 if data.shape[0] != y.shape[0]:
                     print("Error in shape of {}: {} and {}\n".format(t_file, data.shape, y.shape))
             pat_num = t_file.split('/')[-1].split('_')[0] if dataset == "TUSZ" else int(t_file.split('_')[1]) - 1
 
-            valid_start = labels[mode].shape[0] + 90 - 1
-            if mode == 'test': valid_start = valid_start - 4
+            valid_start = labels[mode].shape[0] + 56
+            # if mode == 'test': valid_start = valid_start - 4
             valid_end = labels[mode].shape[0] + y.shape[0]
-            minute_labels[mode] = np.concatenate((minute_labels[mode], np.arange(start=valid_start, stop=valid_end, step=ROI)))
+            minute_labels[mode] = np.concatenate((minute_labels[mode], np.arange(start=valid_start, stop=valid_end, step=60)))
+            # if mode == 'test':
+            #     print(t_file, np.arange(start=valid_start, stop=valid_end, step=60), y.shape[0])
             valid_labels[mode] = np.concatenate((valid_labels[mode], np.arange(start=valid_start, stop=valid_end)))
 
             if pat_num not in pat_start_end[mode]:
@@ -178,7 +182,7 @@ def train(model, device, save_path: str, learning_rate: float = 1e-5, params_lr=
     sample_time_train = sample_time["train"]
     sample_time_val = sample_time["val"]
 
-    train_set = Epilepsy60Dataset(torch.from_numpy(X_train).float(), torch.from_numpy(Y).float(),
+    train_set = Epilepsy60Dataset(torch.from_numpy(X_train).float(), torch.from_numpy(Y).long(),
                                   torch.from_numpy(sample_time_train).long())
     sampler = ImbalancedDataSampler(torch.from_numpy(seizure_indices).long(),
                                     torch.from_numpy(non_seizure_indices).long(),
@@ -187,7 +191,7 @@ def train(model, device, save_path: str, learning_rate: float = 1e-5, params_lr=
                                     overlap=20)
     train_loader = DataLoader(train_set, batch_size=32, sampler=sampler, num_workers=4)
 
-    val_set = Epilepsy60Dataset(torch.from_numpy(X_val).float(), torch.from_numpy(Y_val).float(),
+    val_set = Epilepsy60Dataset(torch.from_numpy(X_val).float(), torch.from_numpy(Y_val).long(),
                                 torch.from_numpy(sample_time_val).long())
     val_sampler = EvaluateSampler(torch.from_numpy(valid_labels['val']).int(), overlap=1)
     val_loader = DataLoader(val_set, shuffle=False, batch_size=16, sampler=val_sampler)
@@ -209,11 +213,11 @@ def train(model, device, save_path: str, learning_rate: float = 1e-5, params_lr=
         if iteration <= 10000:
             set_lr(iteration * target_lr / 10000)
 
-    criterion = BCEWithLogitsLoss()
+    criterion = CrossEntropyLoss()
     N_EPOCHS = 200
     train_loss_list = []
     val_loss_list = []
-    best_f1 = {"value": 0, "epoch": 0, "val_loss": 0}
+    best_f1 = {"value": 0, "epoch": 0, "val_loss": 1000}
 
     for epoch in tqdm(range(N_EPOCHS), desc="Training"):
         model.train(True)  # turn on train mode
@@ -225,7 +229,7 @@ def train(model, device, save_path: str, learning_rate: float = 1e-5, params_lr=
             x, y = x.to(device), y.to(device)
             x = torch.transpose(x, 0, 1)
             y_hat = model(x)
-            loss = criterion(y_hat[-1, :, 0], y.view(-1, ))
+            loss = criterion(y_hat[:, :], y.view(-1, ))
 
             train_loss += loss.detach().cpu().item()
 
@@ -242,22 +246,23 @@ def train(model, device, save_path: str, learning_rate: float = 1e-5, params_lr=
                 x, y = x.to(device), y.to(device)
                 x = torch.transpose(x, 0, 1)
                 voutputs = model(x)
-                test_predict += voutputs[-1, :, 0].tolist()
+                test_predict += voutputs[:, :].tolist()
                 test_labels += y.view(-1, ).tolist()
-                vloss = criterion(voutputs[-1, :, 0], y.view(-1, ))
+                vloss = criterion(voutputs[:, :], y.view(-1, ))
                 running_vloss += vloss.detach().cpu().item()
 
             avg_vloss = running_vloss / len(val_loader)
 
-            best_thresh = thresh_max_f1(y_true=test_labels, y_prob=test_predict)
-            test_predict = (np.array(test_predict) > best_thresh) * 1.0
-            f1_val = f1_score(test_labels, test_predict)
-            print("Best Threshold: {:.2f} -> F1-score: {:.3f}\nValidation LOSS: {:.2f}".format(best_thresh,
-                                                                                               f1_val,
-                                                                                               avg_vloss))
+            # best_thresh = thresh_max_f1(y_true=test_labels, y_prob=test_predict)
+            # test_predict = (np.array(test_predict) > best_thresh) * 1.0
+            # f1_val = f1_score(test_labels, test_predict)
+            # print("Best Threshold: {:.2f} -> F1-score: {:.3f}\nValidation LOSS: {:.2f}".format(best_thresh,
+            #                                                                                    f1_val,
+            #                                                                                    avg_vloss))
             val_loss_list.append(avg_vloss)
-            if f1_val > best_f1["value"]:
-                best_f1["value"] = f1_val
+            print("Validation Loss : {}".format(avg_vloss))
+            if avg_vloss < best_f1["val_loss"]: #f1_val > best_f1["value"]:
+                # best_f1["value"] = f1_val
                 best_f1["epoch"] = epoch
                 best_f1["val_loss"] = avg_vloss
                 print("BEST F1!")
@@ -412,13 +417,13 @@ def train_scratch(dataset):
     seq_len = SEQ_LEN + 3
     segment = SEGMENT
     n_layers = 12
-    n_out = 1
+    n_out = 2
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print('device : ', device)
     model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len,
                            n_layers=n_layers, n_out=n_out, device=device, segments=segment).to(device)
     savepath = '../output/model{}_{}_{}_scratch_bandpower1e4'.format(SEQ_LEN, n_layers, dataset)
-    train(model, device, savepath, learning_rate=1e-4)
+    train(model, device, savepath, learning_rate=1e-5)
 
 
 def finetune():
@@ -431,8 +436,8 @@ def finetune():
     d_hid = 4 * d_model
     seq_len = SEQ_LEN + 5
     segment = SEGMENT
-    n_layers = 8
-    n_out = 1
+    n_layers = 12
+    n_out = 2
 
     model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len,
                            n_layers=n_layers,
@@ -462,7 +467,7 @@ def finetune():
         if param.requires_grad:
             print(
                 name, param.data.shape)
-    train(model, device, savepath, learning_rate=5e-5, params_lr = group_params_lr)
+    train(model, device, savepath, learning_rate=lr_init, params_lr = group_params_lr)
 
 
 def print_results(conf):
@@ -488,9 +493,9 @@ def evaluate(dataset="TUSZ"):
     model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len,
                            n_layers=n_layers,
                            n_out=n_out, device=device, segments=segment).to(device)
-    load_path = '../output/finetuned_bandpower1e4_model{}_n{}_best'.format(SEQ_LEN, n_layers)
+    load_path = '../output/finetuned_bandpower1e4_model{}_n{}_best'.format(300, n_layers)
     # load_path = '../output/model{}_{}_{}_scratch_bandpower1e4'.format(SEQ_LEN, n_layers, dataset)
-    model.load_state_dict(torch.load(load_path))
+    model.load_state_dict(torch.load(load_path), strict=True)
 
     print(model)
 
@@ -516,6 +521,7 @@ def evaluate(dataset="TUSZ"):
             x, y = x.to(device), y.to(device)
             x = torch.transpose(x, 0, 1)
             outputs = model(x)[-1, :, 0]
+            outputs = torch.sigmoid(outputs)
             # print('output shape: {}'.format(outputs.shape))
             # the class with the highest energy is what we choose as prediction
             # _, predicted = torch.max(outputs.data, 1)
@@ -527,12 +533,29 @@ def evaluate(dataset="TUSZ"):
     if mode == "val":
         best_thresh = thresh_max_f1(y_true=test_labels, y_prob=test_predict)
     else:
-        best_thresh = -1.0927
+        best_thresh = 0.19
+
+    if test_predict is not None:
+        if len(set(test_labels)) <= 2:  # binary case
+            auroc = roc_auc_score(y_true=test_labels, y_score=test_predict)
+
     print("Best Threshold: {}".format(best_thresh))
-    test_predict = (np.array(test_predict) > best_thresh) * 1.0
+    average = 'binary'
+    test_predict = (np.array(test_predict) > best_thresh).astype(int)
+    acc = accuracy_score(y_true=test_labels, y_pred=test_predict)
+    f1 = f1_score(y_true=test_labels, y_pred=test_predict, average=average)
+    prec =  precision_score(
+        y_true=test_labels, y_pred=test_predict, average=average)
+    recall = recall_score(
+        y_true=test_labels, y_pred=test_predict, average=average)
+
     conf = confusion_matrix(test_labels, test_predict)
     print_results(conf)
-    print("F1 score: ", f1_score(test_labels, test_predict))
+    print("F1 score: ", f1)
+    print("accuracy: ", acc)
+    print("auroc: ", auroc)
+    print("recall: ", recall)
+    print("precision: ", prec)
 
 
 def evaluate_pretraining(dataset='TUSZ', visualization=False):
@@ -553,7 +576,7 @@ def evaluate_pretraining(dataset='TUSZ', visualization=False):
     d_hid = 4 * d_model
     seq_len = SEQ_LEN + 3
     segment = SEGMENT
-    n_layers = 4
+    n_layers = 12
     n_out = 1
     torch.random.manual_seed(62)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -572,7 +595,7 @@ def evaluate_pretraining(dataset='TUSZ', visualization=False):
                                             sample_time['train'])
     sampler = EvaluateSampler(torch.from_numpy(valid_labels['train']).int(), overlap=60)
     train_loader = DataLoader(train_set, batch_size=1, sampler=sampler)
-    model.load_state_dict(torch.load('../output/pretrain_bandpower_model{}_n{}_{}_best'.format(SEQ_LEN, n_layers, dataset)))
+    model.load_state_dict(torch.load('../output/pretrain_bandpower1e4_model{}_n{}_{}_best'.format(300, n_layers, dataset)), strict=False)
 
     validation_set = PatientDiscriminatorEvaluationDataset(torch.from_numpy(X["val"]).float(), pat_start_end['val'],
                                                            torch.from_numpy(minute_labels['val']).int(),
@@ -592,24 +615,24 @@ def evaluate_pretraining(dataset='TUSZ', visualization=False):
     test_labels = []
     model.eval()
     with torch.no_grad():
-        for i, batch in enumerate(tqdm(validation_loader, position=0, leave=True)):
+        for i, batch in enumerate(tqdm(train_loader if visualization else validation_loader, position=0, leave=True)):
             x, y = batch['x'], batch['y']
             x, y = x.to(device), y.to(device)
             x = torch.transpose(x, 0, 1)
             outputs = model(x)[0][-1, :, 0]
             tokens = model(x)[1]
-
             test_predict += outputs.tolist()
             test_labels += y.view(-1, ).tolist()
 
             if visualization:
+                print(outputs)
                 plt.subplots(2, 1, figsize=(6, 12))
                 plt.subplot(211)
                 plt.title("{}, {}".format(y.detach().item(), batch['len'].detach()))
-                sns.heatmap(x.squeeze().numpy().transpose(), cmap="magma_r")
+                sns.heatmap(x.squeeze().cpu().numpy().transpose(), cmap="magma_r")
                 plt.subplot(212)
-                sns.heatmap(tokens.detach().squeeze().numpy().transpose(), cmap="magma_r")
-                fig, axes = plt.subplots(n_layers, 3, figsize=(12, 6))
+                sns.heatmap(tokens.detach().squeeze().cpu().numpy().transpose(), cmap="magma_r")
+                fig, axes = plt.subplots(n_layers, 2, figsize=(12, 6))
 
                 for l in range(n_layers):
                     x_in = tokens
@@ -621,18 +644,16 @@ def evaluate_pretraining(dataset='TUSZ', visualization=False):
                     attn = torch.einsum('bhqa,bhka->bhqk', Q, K).squeeze()
 
                     res_att_mat = torch.mean(attn, dim=0)
-                    res_att_mat = res_att_mat + torch.eye(res_att_mat.shape[0])
+                    res_att_mat = res_att_mat + torch.eye(res_att_mat.shape[0]).to(device)
                     res_att_mat = res_att_mat / res_att_mat.sum(axis=-1)[..., None]
                     print(res_att_mat.shape)
 
                     attn_rollout = torch.matmul(attn_rollout, res_att_mat) if l != 0 else res_att_mat
-                    important_index = [240, 271, 302]
+                    important_index = [SEGMENT, -1]
                     for idx, im in enumerate(important_index):
-                        axes[l, idx].plot(attn_rollout[im, :].detach().numpy())
+                        axes[l, idx].plot(attn_rollout[im, :].detach().cpu().numpy())
 
                 plt.show()
-    print(test_labels)
-    print(test_predict)
 
     best_thresh = thresh_max_f1(y_true=test_labels, y_prob=test_predict)
     print("Best Threshold: {}".format(best_thresh))
@@ -687,7 +708,7 @@ def visualize_model():
 
 if __name__ == '__main__':
     # pretrain("TUSZ")
-    # evaluate()
+    evaluate()
     # train_scratch(dataset="TUSZ")
-    # evaluate_pretraining()
-    finetune()
+    # evaluate_pretraining(visualization=False)
+    # finetune()

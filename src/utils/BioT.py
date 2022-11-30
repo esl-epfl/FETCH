@@ -10,8 +10,8 @@ from bisect import bisect
 
 torch.manual_seed(1)
 
-SEQ_LEN = 300
-SEGMENT = 240
+SEQ_LEN = 120
+SEGMENT = 63
 ROI = SEQ_LEN - SEGMENT
 
 
@@ -32,9 +32,9 @@ class BioTransformer(nn.Module):
         # self.pos_encoder = PositionalEncoding(d_model, dropout=0.1, max_len=seq_len, segment_length=self.roi_length)
         self.decoder1 = nn.Linear(d_model, 64)
         self.decoder2 = nn.Linear(64, n_out)
-        self.decoder_finetune = nn.Linear(d_model, n_out)
+        # self.decoder_finetune = nn.Linear(d_model, n_out)
 
-        # self.sigmoid = nn.Sigmoid()
+        self.softmax = nn.Softmax()
 
         self.cls_token = nn.Parameter(torch.rand(1, 1, d_model))
         self.sep_token = nn.Parameter(torch.rand(1, 1, d_model))
@@ -49,10 +49,10 @@ class BioTransformer(nn.Module):
         initrange1 = 0.14
         initrange2 = 0.3
         # self.encoder.weight.data.uniform_(-initrange, initrange)
-        self.decoder1.bias.data.zero_()
-        self.decoder1.bias.data.zero_()
-        self.decoder2.weight.data.uniform_(-initrange1, initrange1)
-        self.decoder2.weight.data.uniform_(-initrange2, initrange2)
+        # self.decoder1.bias.data.zero_()
+        # self.decoder1.bias.data.zero_()
+        # self.decoder2.weight.data.uniform_(-initrange1, initrange1)
+        # self.decoder2.weight.data.uniform_(-initrange2, initrange2)
 
     def forward(self, features):
         c, n, h = features.shape
@@ -69,9 +69,9 @@ class BioTransformer(nn.Module):
         tokens = torch.cat((tokens, self.cls_token.repeat(1, n, 1)), dim=0)
         # tokens = self.pos_encoder(tokens)
         output = self.transformer_encoder(tokens)
-        output = self.decoder_finetune(output)
-        # output = self.decoder2(self.dropout(self.activation(self.decoder1(output))))
-        # output = self.sigmoid(output)
+        # output = self.decoder_finetune(output)
+        output = self.decoder2(self.dropout(self.activation(self.decoder1(output))))
+        # output = F.softmax(output, dim=1)
         return output
 
 
@@ -117,11 +117,11 @@ class Epilepsy60Dataset(Dataset):
         if self.sample_time[idx] < SEQ_LEN:
             valid_len = self.sample_time[idx]
             zero_pad = torch.zeros((SEQ_LEN-valid_len-1, self.x_total.shape[1]), dtype=torch.float)
-            x60 = torch.cat((zero_pad, self.x_total[idx-valid_len:idx+1, :]), dim=0)
+            x60 = torch.cat((zero_pad, self.x_total[idx-valid_len:idx+1, :]), dim=0) # TODO use torch pad
         else:
             valid_len = SEQ_LEN - 1
             x60 = self.x_total[idx - SEQ_LEN + 1:idx + 1, :]
-        valid_roi = min(valid_len, ROI)
+        valid_roi = min(valid_len, ROI-4)
         y60 = torch.max(self.y_total[idx-valid_roi : idx +1])
 
         sample = {'x': x60, 'y': y60, 'idx': idx}

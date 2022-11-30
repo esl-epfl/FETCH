@@ -77,9 +77,9 @@ dataset_parameter = {"TUSZ": {
     "scratch": {
         "band_feature_size": 126,
         "zc_feature_size": 126,
-        "train_len": 2356547,
-        "val_len": 335540,
-        "test_len": 537670
+        "train_len": 2360564,
+        "val_len": 336122,
+        "test_len": 538549
     }
 },
     "Epilepsiae": {
