@@ -70,9 +70,9 @@ dataset_parameter = {"TUSZ": {
     "pretrain": {
         "band_feature_size": 126,
         "zc_feature_size": 126,
-        "train_len": 2683795,
-        "val_len": 8292,
-        "test_len": 537670
+        "train_len": 2688375,
+        "val_len": 8311,
+        "test_len": 538549
     },
     "scratch": {
         "band_feature_size": 126,

@@ -15,6 +15,7 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.optim import SGD, Adam, AdamW
 from tqdm import tqdm
 import torch.nn.functional as F
+from sklearn.preprocessing import QuantileTransformer
 from sklearn.metrics import confusion_matrix, f1_score, roc_auc_score, accuracy_score, precision_score, recall_score
 from utils.BioT import SEQ_LEN, SEGMENT, ROI
 from utils.params import dataset_parameter
@@ -83,7 +84,7 @@ def get_data(pretrain_mode=False, dataset='TUSZ'):
     valid_labels = {'train': np.zeros(0, dtype=np.int), 'test': np.zeros(0, dtype=np.int),
                     'val': np.zeros(0, dtype=np.int)}
     minute_labels = {'train': np.zeros(0, dtype=np.int), 'test': np.zeros(0, dtype=np.int),
-                    'val': np.zeros(0, dtype=np.int)}
+                     'val': np.zeros(0, dtype=np.int)}
     sample_time = {'train': np.zeros(0, dtype=np.int), 'test': np.zeros(0, dtype=np.int),
                    'val': np.zeros(0, dtype=np.int)}
     total_dataset = {'train': training_set, 'test': test_set, 'val': validation_set}
@@ -96,21 +97,22 @@ def get_data(pretrain_mode=False, dataset='TUSZ'):
         for t_file in total_dataset[mode]:
             with open(rootdir + '/{}_band_mean_ll.pickle'.format(t_file), 'rb') as pickle_file:
                 band_data = pickle.load(pickle_file)
-                band_data = np.pad(band_data, ((0,1), (0,0)))
+                band_data = np.pad(band_data, ((0, 1), (0, 0)))
                 X[mode][start_index:start_index + band_data.shape[0], :band_feature_size] = band_data
 
             with open(rootdir + '/{}_zc.pickle'.format(t_file), 'rb') as pickle_file:
                 # print(t_file)
                 data = pickle.load(pickle_file)
                 data = np.pad(data, ((0, 1), (0, 0)))
-                assert data.shape[0] == band_data.shape[0],\
-                    "Band power feature length {} is not equal to zero crossing {}".format(data.shape[0], band_data.shape[0])
+                assert data.shape[0] == band_data.shape[0], \
+                    "Band power feature length {} is not equal to zero crossing {}".format(data.shape[0],
+                                                                                           band_data.shape[0])
                 # if pretrain_mode and data.shape[0] < SEQ_LEN:  # very short files
                 #     continue
                 total_len += data.shape[0]
                 X[mode][start_index:start_index + data.shape[0], band_feature_size:] = data
                 start_index += data.shape[0]
-                y = np.zeros(data.shape[0]) if pretrain_mode else np.pad(df_file_name.loc[t_file, 'labels'], (0,1))
+                y = np.zeros(data.shape[0]) if pretrain_mode else np.pad(df_file_name.loc[t_file, 'labels'], (0, 1))
                 if data.shape[0] != y.shape[0]:
                     print("Error in shape of {}: {} and {}\n".format(t_file, data.shape, y.shape))
             pat_num = t_file.split('/')[-1].split('_')[0] if dataset == "TUSZ" else int(t_file.split('_')[1]) - 1
@@ -118,7 +120,8 @@ def get_data(pretrain_mode=False, dataset='TUSZ'):
             valid_start = labels[mode].shape[0] + 56
             # if mode == 'test': valid_start = valid_start - 4
             valid_end = labels[mode].shape[0] + y.shape[0]
-            minute_labels[mode] = np.concatenate((minute_labels[mode], np.arange(start=valid_start, stop=valid_end, step=60)))
+            minute_labels[mode] = np.concatenate(
+                (minute_labels[mode], np.arange(start=valid_start, stop=valid_end, step=60)))
             # if mode == 'test':
             #     print(t_file, np.arange(start=valid_start, stop=valid_end, step=60), y.shape[0])
             valid_labels[mode] = np.concatenate((valid_labels[mode], np.arange(start=valid_start, stop=valid_end)))
@@ -134,12 +137,18 @@ def get_data(pretrain_mode=False, dataset='TUSZ'):
     print(X["train"].shape)
     print(X["val"].shape)
     print(X["test"].shape)
-    mean_train = np.mean(X["train"], axis=0)[None, ...]
-    print("Mean shape: {} -> {}".format(X["train"].shape, mean_train.shape))
-    std_train = np.std(X["train"], axis=0)[None, ...]
-    X["train"] = (X["train"] - mean_train) / std_train
-    X["val"] = (X["val"] - mean_train) / std_train
-    X["test"] = (X["test"] - mean_train) / std_train
+
+    qt = QuantileTransformer(n_quantiles=1000, output_distribution='normal')
+    X['train'] = qt.fit_transform(X['train'])
+
+    # mean_train = np.mean(X["train"], axis=0)[None, ...]
+    # print("Mean shape: {} -> {}".format(X["train"].shape, mean_train.shape))
+    # std_train = np.std(X["train"], axis=0)[None, ...]
+    # X["train"] = (X["train"] - mean_train) / std_train
+    # X["val"] = (X["val"] - mean_train) / std_train
+    # X["test"] = (X["test"] - mean_train) / std_train
+    X['test'] = qt.transform(X['test'])
+    X['val'] = qt.transform(X['val'])
     print(valid_labels["test"].shape)
     return X, labels, minute_labels, pat_start_end, sample_time, valid_labels
 
@@ -182,7 +191,7 @@ def train(model, device, save_path: str, learning_rate: float = 1e-5, params_lr=
     sample_time_train = sample_time["train"]
     sample_time_val = sample_time["val"]
 
-    train_set = Epilepsy60Dataset(torch.from_numpy(X_train).float(), torch.from_numpy(Y).long(),
+    train_set = Epilepsy60Dataset(torch.from_numpy(X_train).float(), torch.from_numpy(Y).float(),
                                   torch.from_numpy(sample_time_train).long())
     sampler = ImbalancedDataSampler(torch.from_numpy(seizure_indices).long(),
                                     torch.from_numpy(non_seizure_indices).long(),
@@ -191,13 +200,13 @@ def train(model, device, save_path: str, learning_rate: float = 1e-5, params_lr=
                                     overlap=20)
     train_loader = DataLoader(train_set, batch_size=32, sampler=sampler, num_workers=4)
 
-    val_set = Epilepsy60Dataset(torch.from_numpy(X_val).float(), torch.from_numpy(Y_val).long(),
+    val_set = Epilepsy60Dataset(torch.from_numpy(X_val).float(), torch.from_numpy(Y_val).float(),
                                 torch.from_numpy(sample_time_val).long())
     val_sampler = EvaluateSampler(torch.from_numpy(valid_labels['val']).int(), overlap=1)
     val_loader = DataLoader(val_set, shuffle=False, batch_size=16, sampler=val_sampler)
 
     # Training loop
-    if params_lr==None:
+    if params_lr == None:
         optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
     else:
         optimizer = torch.optim.AdamW(params_lr, lr=learning_rate, weight_decay=1e-4)
@@ -207,29 +216,29 @@ def train(model, device, save_path: str, learning_rate: float = 1e-5, params_lr=
 
     def set_lr(new_lr):
         for param_group in optimizer.param_groups:
-            param_group['lr'] = (new_lr/target_lr) * param_group['initial_lr']
+            param_group['lr'] = (new_lr / target_lr) * param_group['initial_lr']
 
     def schedule_lr(iteration):
-        if iteration <= 10000:
-            set_lr(iteration * target_lr / 10000)
+        if iteration <= 5000:
+            set_lr(iteration * target_lr / 5000)
 
-    criterion = CrossEntropyLoss()
+    criterion = BCEWithLogitsLoss()
     N_EPOCHS = 200
     train_loss_list = []
     val_loss_list = []
-    best_f1 = {"value": 0, "epoch": 0, "val_loss": 1000}
+    best_f1 = {"value": 0, "epoch": 0, "val_loss": 1000, "auc": 0}
 
     for epoch in tqdm(range(N_EPOCHS), desc="Training"):
         model.train(True)  # turn on train mode
         train_loss = 0.0
         for i, batch in enumerate(tqdm(train_loader, desc=f"Epoch {epoch + 1}", position=0, leave=True)):
             optimizer.zero_grad()
-            schedule_lr(epoch*len(train_loader) + i)
+            schedule_lr(epoch * len(train_loader) + i)
             x, y = batch['x'], batch['y']
             x, y = x.to(device), y.to(device)
             x = torch.transpose(x, 0, 1)
             y_hat = model(x)
-            loss = criterion(y_hat[:, :], y.view(-1, ))
+            loss = criterion(y_hat[-1, :, 0], y.view(-1, ))
 
             train_loss += loss.detach().cpu().item()
 
@@ -246,31 +255,35 @@ def train(model, device, save_path: str, learning_rate: float = 1e-5, params_lr=
                 x, y = x.to(device), y.to(device)
                 x = torch.transpose(x, 0, 1)
                 voutputs = model(x)
-                test_predict += voutputs[:, :].tolist()
                 test_labels += y.view(-1, ).tolist()
-                vloss = criterion(voutputs[:, :], y.view(-1, ))
+                vloss = criterion(voutputs[-1, :, 0], y.view(-1, ))
                 running_vloss += vloss.detach().cpu().item()
+
+                test_predict += torch.sigmoid(voutputs[-1, :, 0]).tolist()
 
             avg_vloss = running_vloss / len(val_loader)
 
-            # best_thresh = thresh_max_f1(y_true=test_labels, y_prob=test_predict)
-            # test_predict = (np.array(test_predict) > best_thresh) * 1.0
-            # f1_val = f1_score(test_labels, test_predict)
-            # print("Best Threshold: {:.2f} -> F1-score: {:.3f}\nValidation LOSS: {:.2f}".format(best_thresh,
-            #                                                                                    f1_val,
-            #                                                                                    avg_vloss))
+            auroc = roc_auc_score(y_true=test_labels, y_score=test_predict)
+            best_thresh = thresh_max_f1(y_true=test_labels, y_prob=test_predict)
+            test_predict = (np.array(test_predict) > best_thresh) * 1.0
+            f1_val = f1_score(test_labels, test_predict)
+            print(
+                "Best Threshold: {:.2f} -> F1-score: {:.3f}\nAUROC: {:.3f}\nValidation LOSS: {:.2f}".format(best_thresh,
+                                                                                                            f1_val,
+                                                                                                            auroc,
+                                                                                                            avg_vloss))
             val_loss_list.append(avg_vloss)
-            print("Validation Loss : {}".format(avg_vloss))
-            if avg_vloss < best_f1["val_loss"]: #f1_val > best_f1["value"]:
-                # best_f1["value"] = f1_val
+            if auroc > best_f1["auc"]:
+                best_f1["value"] = f1_val
                 best_f1["epoch"] = epoch
                 best_f1["val_loss"] = avg_vloss
+                best_f1["auc"] = auroc
                 print("BEST F1!")
                 torch.save(model.state_dict(), "{}_best".format(save_path))
 
         lr_sched.step()
         lr = lr_sched.get_last_lr()[0]
-            #
+        #
         print(f"Epoch {epoch + 1}/{N_EPOCHS} Training loss: {train_loss / len(train_loader):.2f} Learning Rate {lr} ")
         train_loss_list.append(train_loss / len(train_loader))
         if epoch > best_f1["epoch"] + 10 and avg_vloss > best_f1["val_loss"]:
@@ -292,7 +305,8 @@ def get_pat_start_end(pat_file_start_end):
 
 
 def pretrain(dataset):
-    X, labels, minute_labels, pat_file_start_end, sample_time, valid_labels = get_data(pretrain_mode=True, dataset=dataset)
+    X, labels, minute_labels, pat_file_start_end, sample_time, valid_labels = get_data(pretrain_mode=True,
+                                                                                       dataset=dataset)
     d_feature = 252 if dataset == "TUSZ" else 144
     d_model = 256
     n_heads = 4
@@ -312,7 +326,8 @@ def pretrain(dataset):
 
     pat_start_end = get_pat_start_end(pat_file_start_end)
 
-    train_set = PatientDiscriminatorDataset(torch.from_numpy(X_train).float(), pat_start_end['train'], sample_time['train'])
+    train_set = PatientDiscriminatorDataset(torch.from_numpy(X_train).float(), pat_start_end['train'],
+                                            sample_time['train'])
     sampler = EvaluateSampler(torch.from_numpy(valid_labels['train']).int(), overlap=20)
     train_loader = DataLoader(train_set, batch_size=32, sampler=sampler)
 
@@ -351,7 +366,7 @@ def pretrain(dataset):
     # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.95)
     N_EPOCHS = 200
     val_loss_list = []
-    save_path = '../output/pretrain_bandpower1e4_model{}_n{}_{}'.format(SEQ_LEN, n_layers, dataset)
+    save_path = '../output/pretrain_quantile_model{}_n{}_{}'.format(SEQ_LEN, n_layers, dataset)
     best_f1 = {"value": 0, "epoch": 0}
     for epoch in tqdm(range(N_EPOCHS), desc="Training"):
         model.train(True)  # turn on train mode
@@ -410,19 +425,19 @@ def pretrain(dataset):
 
 
 def train_scratch(dataset):
-    d_feature = 126*2 if dataset == "TUSZ" else 144
+    d_feature = 126 * 2 if dataset == "TUSZ" else 144
     d_model = 256
     n_heads = 4
     d_hid = 4 * d_model
     seq_len = SEQ_LEN + 3
     segment = SEGMENT
-    n_layers = 12
-    n_out = 2
+    n_layers = 4
+    n_out = 1
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print('device : ', device)
     model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len,
                            n_layers=n_layers, n_out=n_out, device=device, segments=segment).to(device)
-    savepath = '../output/model{}_{}_{}_scratch_bandpower1e4'.format(SEQ_LEN, n_layers, dataset)
+    savepath = '../output/model{}_{}_{}_scratch_quantile'.format(SEQ_LEN, n_layers, dataset)
     train(model, device, savepath, learning_rate=1e-5)
 
 
@@ -430,44 +445,47 @@ def finetune():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print('device : ', device)
 
-    d_feature = 126 * 2 #144
+    d_feature = 126 * 2  # 144
     d_model = 256
     n_heads = 4
     d_hid = 4 * d_model
     seq_len = SEQ_LEN + 5
     segment = SEGMENT
     n_layers = 12
-    n_out = 2
+    n_out = 1
 
     model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len,
                            n_layers=n_layers,
                            n_out=n_out, device=device, segments=segment).to(device)
-    model.load_state_dict(torch.load("../output/pretrain_bandpower1e4_model300_n{}_TUSZ_best".format(n_layers)), strict=False)
+    model.load_state_dict(torch.load("../output/pretrain_quantile_model300_n{}_TUSZ_best".format(n_layers)),
+                          strict=False)
 
-    savepath = '../output/finetuned_bandpower1e4_model{}_n{}'.format(SEQ_LEN, n_layers)
+    savepath = '../output/finetuned_quantile_model{}_n{}'.format(SEQ_LEN, n_layers)
     lr_init = 1e-5
     group_params_lr = [
         # {'params': model.sep_token.parameters(), 'lr': lr_init},
         # {'params': model.cls_token.parameters(), 'lr': lr_init},
-        {'params': model.transformer_encoder.layers[0].parameters(), 'lr': 2* lr_init},
-        {'params': model.transformer_encoder.layers[1].parameters(), 'lr': 2* lr_init},
-        {'params': model.transformer_encoder.layers[2].parameters(), 'lr': 2* lr_init},
-        {'params': model.transformer_encoder.layers[3].parameters(), 'lr': 2* lr_init},
-        {'params': model.transformer_encoder.layers[4].parameters(), 'lr': 4* lr_init},
-        {'params': model.transformer_encoder.layers[5].parameters(), 'lr': 4* lr_init},
-        {'params': model.transformer_encoder.layers[6].parameters(), 'lr': 4* lr_init},
-        {'params': model.transformer_encoder.layers[7].parameters(), 'lr': 4* lr_init},
-        {'params': model.decoder_finetune.parameters(), 'lr': 5* lr_init},
+        {'params': model.transformer_encoder.layers[0].parameters(), 'lr': 2 * lr_init},
+        {'params': model.transformer_encoder.layers[1].parameters(), 'lr': 2 * lr_init},
+        {'params': model.transformer_encoder.layers[2].parameters(), 'lr': 2 * lr_init},
+        {'params': model.transformer_encoder.layers[3].parameters(), 'lr': 2 * lr_init},
+        {'params': model.transformer_encoder.layers[4].parameters(), 'lr': 4 * lr_init},
+        {'params': model.transformer_encoder.layers[5].parameters(), 'lr': 4 * lr_init},
+        {'params': model.transformer_encoder.layers[6].parameters(), 'lr': 4 * lr_init},
+        {'params': model.transformer_encoder.layers[7].parameters(), 'lr': 4 * lr_init},
+        {'params': model.decoder_finetune.parameters(), 'lr': 5 * lr_init},
     ]
     # for layer_num in range(n_layers-2):
     #     for param in model.transformer_encoder.layers[layer_num].parameters():
     #         param.requires_grad = False
+    model.decoder_finetune.weight.data.uniform_(-0.15, 0.15)
+    model.decoder_finetune.bias.data.zero_()
 
     for name, param in model.named_parameters():
         if param.requires_grad:
             print(
                 name, param.data.shape)
-    train(model, device, savepath, learning_rate=lr_init, params_lr = group_params_lr)
+    train(model, device, savepath, learning_rate=lr_init, params_lr=group_params_lr)
 
 
 def print_results(conf):
@@ -480,7 +498,7 @@ def print_results(conf):
 
 
 def evaluate(dataset="TUSZ"):
-    d_feature = 126*2 if dataset == "TUSZ" else 144
+    d_feature = 126 * 2 if dataset == "TUSZ" else 144
     d_model = 256
     n_heads = 4
     d_hid = 4 * d_model
@@ -493,69 +511,70 @@ def evaluate(dataset="TUSZ"):
     model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len,
                            n_layers=n_layers,
                            n_out=n_out, device=device, segments=segment).to(device)
-    load_path = '../output/finetuned_bandpower1e4_model{}_n{}_best'.format(300, n_layers)
-    # load_path = '../output/model{}_{}_{}_scratch_bandpower1e4'.format(SEQ_LEN, n_layers, dataset)
+    # load_path = '../output/finetuned_quantile_model{}_n{}_best_f1optimized'.format(300, n_layers)
+    load_path = '../output/model{}_{}_{}_scratch_quantile_best_f1optimized'.format(300, n_layers, dataset)
     model.load_state_dict(torch.load(load_path), strict=True)
 
     print(model)
 
     X, labels, valid_labels, _, sample_time, _ = get_data(pretrain_mode=False, dataset="TUSZ")
-    mode = "test"
-    X_test = X[mode]
-    Y = labels[mode]
-    sample_time_test = sample_time[mode]
+    best_th_init = 0.5
+    for mode in ["val", "test"]:
+        X_test = X[mode]
+        Y = labels[mode]
+        sample_time_test = sample_time[mode]
 
-    test_set = Epilepsy60Dataset(torch.from_numpy(X_test).float(), torch.from_numpy(Y).long(),
-                                 torch.from_numpy(sample_time_test).long())
-    test_sampler = EvaluateSampler(torch.from_numpy(valid_labels[mode]).int(), overlap=1)
-    test_loader = DataLoader(test_set, batch_size=32, shuffle=False, sampler=test_sampler)
+        test_set = Epilepsy60Dataset(torch.from_numpy(X_test).float(), torch.from_numpy(Y).long(),
+                                     torch.from_numpy(sample_time_test).long())
+        test_sampler = EvaluateSampler(torch.from_numpy(valid_labels[mode]).int(), overlap=1)
+        test_loader = DataLoader(test_set, batch_size=32, shuffle=False, sampler=test_sampler)
 
-    model.eval()
-    test_predict = []
-    test_labels = []
-    fig_cnt = 0
-    # since we're not training, we don't need to calculate the gradients for our outputs
-    with torch.no_grad():
-        for batch in test_loader:
-            x, y = batch['x'], batch['y']
-            x, y = x.to(device), y.to(device)
-            x = torch.transpose(x, 0, 1)
-            outputs = model(x)[-1, :, 0]
-            outputs = torch.sigmoid(outputs)
-            # print('output shape: {}'.format(outputs.shape))
-            # the class with the highest energy is what we choose as prediction
-            # _, predicted = torch.max(outputs.data, 1)
-            predicted = outputs
-            # print('predicted: {}'.format(predicted))
-            test_predict += predicted.tolist()
-            test_labels += y.view(-1, ).tolist()
+        model.eval()
+        test_predict = []
+        test_labels = []
+        fig_cnt = 0
+        # since we're not training, we don't need to calculate the gradients for our outputs
+        with torch.no_grad():
+            for batch in test_loader:
+                x, y = batch['x'], batch['y']
+                x, y = x.to(device), y.to(device)
+                x = torch.transpose(x, 0, 1)
+                outputs = model(x)[-1, :, 0]
+                # print('output shape: {}'.format(outputs.shape))
+                # the class with the highest energy is what we choose as prediction
+                # _, predicted = torch.max(outputs.data, 1)
+                predicted = torch.sigmoid(outputs)
+                # print('predicted: {}'.format(predicted))
+                test_predict += predicted.tolist()
+                test_labels += y.view(-1, ).tolist()
 
-    if mode == "val":
-        best_thresh = thresh_max_f1(y_true=test_labels, y_prob=test_predict)
-    else:
-        best_thresh = 0.19
+        if mode == "val":
+            best_thresh = thresh_max_f1(y_true=test_labels, y_prob=test_predict)
+            best_th_init = best_thresh
+        else:
+            best_thresh = best_th_init
 
-    if test_predict is not None:
-        if len(set(test_labels)) <= 2:  # binary case
-            auroc = roc_auc_score(y_true=test_labels, y_score=test_predict)
+        if test_predict is not None:
+            if len(set(test_labels)) <= 2:  # binary case
+                auroc = roc_auc_score(y_true=test_labels, y_score=test_predict)
 
-    print("Best Threshold: {}".format(best_thresh))
-    average = 'binary'
-    test_predict = (np.array(test_predict) > best_thresh).astype(int)
-    acc = accuracy_score(y_true=test_labels, y_pred=test_predict)
-    f1 = f1_score(y_true=test_labels, y_pred=test_predict, average=average)
-    prec =  precision_score(
-        y_true=test_labels, y_pred=test_predict, average=average)
-    recall = recall_score(
-        y_true=test_labels, y_pred=test_predict, average=average)
+        print("Best Threshold: {}".format(best_thresh))
+        average = 'binary'
+        test_predict = (np.array(test_predict) > best_thresh).astype(int)
+        acc = accuracy_score(y_true=test_labels, y_pred=test_predict)
+        f1 = f1_score(y_true=test_labels, y_pred=test_predict, average=average)
+        prec = precision_score(
+            y_true=test_labels, y_pred=test_predict, average=average)
+        recall = recall_score(
+            y_true=test_labels, y_pred=test_predict, average=average)
 
-    conf = confusion_matrix(test_labels, test_predict)
-    print_results(conf)
-    print("F1 score: ", f1)
-    print("accuracy: ", acc)
-    print("auroc: ", auroc)
-    print("recall: ", recall)
-    print("precision: ", prec)
+        conf = confusion_matrix(test_labels, test_predict)
+        print_results(conf)
+        print("F1 score: ", f1)
+        print("accuracy: ", acc)
+        print("auroc: ", auroc)
+        print("recall: ", recall)
+        print("precision: ", prec)
 
 
 def evaluate_pretraining(dataset='TUSZ', visualization=False):
@@ -570,7 +589,7 @@ def evaluate_pretraining(dataset='TUSZ', visualization=False):
 
         return hook
 
-    d_feature = 126*2 if dataset == "TUSZ" else 144
+    d_feature = 126 * 2 if dataset == "TUSZ" else 144
     d_model = 256
     n_heads = 4
     d_hid = 4 * d_model
@@ -586,7 +605,8 @@ def evaluate_pretraining(dataset='TUSZ', visualization=False):
                            n_layers=n_layers,
                            n_out=n_out, device=device, segments=segment).to(device)
 
-    X, labels, minute_labels, pat_file_start_end, sample_time, valid_labels = get_data(pretrain_mode=True, dataset=dataset)
+    X, labels, minute_labels, pat_file_start_end, sample_time, valid_labels = get_data(pretrain_mode=True,
+                                                                                       dataset=dataset)
     X_train = X["train"]
 
     pat_start_end = get_pat_start_end(pat_file_start_end)
@@ -595,7 +615,8 @@ def evaluate_pretraining(dataset='TUSZ', visualization=False):
                                             sample_time['train'])
     sampler = EvaluateSampler(torch.from_numpy(valid_labels['train']).int(), overlap=60)
     train_loader = DataLoader(train_set, batch_size=1, sampler=sampler)
-    model.load_state_dict(torch.load('../output/pretrain_bandpower1e4_model{}_n{}_{}_best'.format(300, n_layers, dataset)), strict=False)
+    model.load_state_dict(
+        torch.load('../output/pretrain_bandpower1e4_model{}_n{}_{}_best'.format(300, n_layers, dataset)), strict=False)
 
     validation_set = PatientDiscriminatorEvaluationDataset(torch.from_numpy(X["val"]).float(), pat_start_end['val'],
                                                            torch.from_numpy(minute_labels['val']).int(),
@@ -609,7 +630,7 @@ def evaluate_pretraining(dataset='TUSZ', visualization=False):
 
     if visualization:
         for i in range(1, n_layers):
-            model.transformer_encoder.layers[i-1].register_forward_hook(get_activation('layer{}_in'.format(i)))
+            model.transformer_encoder.layers[i - 1].register_forward_hook(get_activation('layer{}_in'.format(i)))
 
     test_predict = []
     test_labels = []
@@ -708,7 +729,7 @@ def visualize_model():
 
 if __name__ == '__main__':
     # pretrain("TUSZ")
-    evaluate()
+    # evaluate()
     # train_scratch(dataset="TUSZ")
     # evaluate_pretraining(visualization=False)
-    # finetune()
+    finetune()
