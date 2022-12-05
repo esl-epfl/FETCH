@@ -26,33 +26,23 @@ class BioTransformer(nn.Module):
         self.seq_len = seq_len
 
         self.roi_length = torch.tensor([57, 45, 30, 15, 0])
-        encoder_layers = TransformerEncoderLayer_(d_model, n_heads, d_hid, relative_positional_distance=30)
+        encoder_layers = TransformerEncoderLayer_(d_model, n_heads, d_hid, relative_positional_distance=60)
         self.transformer_encoder = TransformerEncoder(encoder_layers, n_layers)
-        # self.encoder = nn.Linear(d_feature, d_model)
-        # self.pos_encoder = PositionalEncoding(d_model, dropout=0.1, max_len=seq_len, segment_length=self.roi_length)
-        # self.decoder1 = nn.Linear(d_model, 64)
-        # self.decoder2 = nn.Linear(64, n_out)
-        self.decoder_finetune = nn.Linear(d_model, n_out)
-
-        self.softmax = nn.Softmax()
+        self.decoder = nn.Linear(d_model, n_out)
 
         self.cls_token = nn.Parameter(torch.rand(1, 1, d_model))
         self.sep_token = nn.Parameter(torch.rand(1, 1, d_model))
         self.segment_embedding = nn.Parameter(torch.rand(7, 1, d_model))
 
-        self.dropout = nn.Dropout(0.3)
+        self.dropout = nn.Dropout(0.1)
         self.activation = nn.ReLU()
 
         self.init_weights()
 
     def init_weights(self) -> None:
         initrange1 = 0.14
-        initrange2 = 0.3
-        # self.encoder.weight.data.uniform_(-initrange, initrange)
-        # self.decoder1.bias.data.zero_()
-        # self.decoder1.bias.data.zero_()
-        # self.decoder2.weight.data.uniform_(-initrange1, initrange1)
-        # self.decoder2.weight.data.uniform_(-initrange2, initrange2)
+        self.decoder.bias.data.zero_()
+        self.decoder.weight.data.uniform_(-initrange1, initrange1)
 
     def forward(self, features):
         c, n, h = features.shape
@@ -67,11 +57,8 @@ class BioTransformer(nn.Module):
                                dim=0)
 
         tokens = torch.cat((tokens, self.cls_token.repeat(1, n, 1)), dim=0)
-        # tokens = self.pos_encoder(tokens)
         output = self.transformer_encoder(tokens)
-        output = self.decoder_finetune(output)
-        # output = self.decoder2(self.dropout(self.activation(self.decoder1(output))))
-        # output = F.softmax(output, dim=1)
+        output = self.decoder(output)
         return output
 
 

@@ -122,8 +122,6 @@ def get_data(pretrain_mode=False, dataset='TUSZ'):
             valid_end = labels[mode].shape[0] + y.shape[0]
             minute_labels[mode] = np.concatenate(
                 (minute_labels[mode], np.arange(start=valid_start, stop=valid_end, step=60)))
-            # if mode == 'test':
-            #     print(t_file, np.arange(start=valid_start, stop=valid_end, step=60), y.shape[0])
             valid_labels[mode] = np.concatenate((valid_labels[mode], np.arange(start=valid_start, stop=valid_end)))
 
             if pat_num not in pat_start_end[mode]:
@@ -138,17 +136,13 @@ def get_data(pretrain_mode=False, dataset='TUSZ'):
     print(X["val"].shape)
     print(X["test"].shape)
 
-    qt = QuantileTransformer(n_quantiles=1000, output_distribution='normal')
-    X['train'] = qt.fit_transform(X['train'])
+    mean_train = np.mean(X["train"], axis=0)[None, ...]
+    print("Mean shape: {} -> {}".format(X["train"].shape, mean_train.shape))
+    std_train = np.std(X["train"], axis=0)[None, ...]
+    X["train"] = (X["train"] - mean_train) / std_train
+    X["val"] = (X["val"] - mean_train) / std_train
+    X["test"] = (X["test"] - mean_train) / std_train
 
-    # mean_train = np.mean(X["train"], axis=0)[None, ...]
-    # print("Mean shape: {} -> {}".format(X["train"].shape, mean_train.shape))
-    # std_train = np.std(X["train"], axis=0)[None, ...]
-    # X["train"] = (X["train"] - mean_train) / std_train
-    # X["val"] = (X["val"] - mean_train) / std_train
-    # X["test"] = (X["test"] - mean_train) / std_train
-    X['test'] = qt.transform(X['test'])
-    X['val'] = qt.transform(X['val'])
     print(valid_labels["test"].shape)
     return X, labels, minute_labels, pat_start_end, sample_time, valid_labels
 
@@ -227,7 +221,8 @@ def train(model, device, save_path: str, learning_rate: float = 1e-5, params_lr=
     train_loss_list = []
     val_loss_list = []
     best_f1 = {"value": 0, "epoch": 0, "val_loss": 1000, "auc": 0}
-
+    prev_val_loss = 1000
+    patience_count = 0
     for epoch in tqdm(range(N_EPOCHS), desc="Training"):
         model.train(True)  # turn on train mode
         train_loss = 0.0
@@ -286,7 +281,13 @@ def train(model, device, save_path: str, learning_rate: float = 1e-5, params_lr=
         #
         print(f"Epoch {epoch + 1}/{N_EPOCHS} Training loss: {train_loss / len(train_loader):.2f} Learning Rate {lr} ")
         train_loss_list.append(train_loss / len(train_loader))
-        if epoch > best_f1["epoch"] + 10 and avg_vloss > best_f1["val_loss"]:
+
+        if avg_vloss < prev_val_loss:
+            patience_count = 0
+        else:
+            patience_count += 1
+        prev_val_loss = avg_vloss
+        if epoch > best_f1["epoch"] + 10 and patience_count > 3:
             break
 
     torch.save(model.state_dict(), save_path)
@@ -313,7 +314,7 @@ def pretrain(dataset):
     d_hid = 4 * d_model
     seq_len = SEQ_LEN + 3
     segment = SEGMENT
-    n_layers = 12
+    n_layers = 8
     n_out = 1
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     # device = torch.device('cpu')
@@ -366,7 +367,7 @@ def pretrain(dataset):
     # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.95)
     N_EPOCHS = 200
     val_loss_list = []
-    save_path = '../output/pretrain_quantile_model{}_n{}_{}'.format(SEQ_LEN, n_layers, dataset)
+    save_path = '../output/pretrain_model{}_n{}_{}'.format(SEQ_LEN, n_layers, dataset)
     best_f1 = {"value": 0, "epoch": 0}
     for epoch in tqdm(range(N_EPOCHS), desc="Training"):
         model.train(True)  # turn on train mode
@@ -413,7 +414,7 @@ def pretrain(dataset):
                 best_f1["epoch"] = epoch
                 print("BEST F1!")
                 torch.save(model.state_dict(), "{}_best".format(save_path))
-        if epoch > best_f1["epoch"] + 10:
+        if epoch > best_f1["epoch"] + 20:
             break
 
         lr_sched.step()
@@ -431,13 +432,13 @@ def train_scratch(dataset):
     d_hid = 4 * d_model
     seq_len = SEQ_LEN + 3
     segment = SEGMENT
-    n_layers = 4
+    n_layers = 8
     n_out = 1
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print('device : ', device)
     model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len,
                            n_layers=n_layers, n_out=n_out, device=device, segments=segment).to(device)
-    savepath = '../output/model{}_{}_{}_scratch_quantile'.format(SEQ_LEN, n_layers, dataset)
+    savepath = '../output/model{}_{}_{}_scratch'.format(SEQ_LEN, n_layers, dataset)
     train(model, device, savepath, learning_rate=1e-5)
 
 
@@ -451,16 +452,16 @@ def finetune():
     d_hid = 4 * d_model
     seq_len = SEQ_LEN + 5
     segment = SEGMENT
-    n_layers = 12
+    n_layers = 8
     n_out = 1
 
     model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len,
                            n_layers=n_layers,
                            n_out=n_out, device=device, segments=segment).to(device)
-    model.load_state_dict(torch.load("../output/pretrain_quantile_model300_n{}_TUSZ_best".format(n_layers)),
+    model.load_state_dict(torch.load("../output/pretrain_model300_n{}_TUSZ_best".format(n_layers)),
                           strict=False)
 
-    savepath = '../output/finetuned_quantile_model{}_n{}'.format(SEQ_LEN, n_layers)
+    savepath = '../output/finetuned_model{}_n{}'.format(SEQ_LEN, n_layers)
     lr_init = 1e-5
     group_params_lr = [
         # {'params': model.sep_token.parameters(), 'lr': lr_init},
@@ -469,17 +470,21 @@ def finetune():
         {'params': model.transformer_encoder.layers[1].parameters(), 'lr': 2 * lr_init},
         {'params': model.transformer_encoder.layers[2].parameters(), 'lr': 2 * lr_init},
         {'params': model.transformer_encoder.layers[3].parameters(), 'lr': 2 * lr_init},
-        {'params': model.transformer_encoder.layers[4].parameters(), 'lr': 4 * lr_init},
-        {'params': model.transformer_encoder.layers[5].parameters(), 'lr': 4 * lr_init},
-        {'params': model.transformer_encoder.layers[6].parameters(), 'lr': 4 * lr_init},
-        {'params': model.transformer_encoder.layers[7].parameters(), 'lr': 4 * lr_init},
-        {'params': model.decoder_finetune.parameters(), 'lr': 5 * lr_init},
+        {'params': model.transformer_encoder.layers[4].parameters(), 'lr': 3 * lr_init},
+        {'params': model.transformer_encoder.layers[5].parameters(), 'lr': 3 * lr_init},
+        {'params': model.transformer_encoder.layers[6].parameters(), 'lr': 3 * lr_init},
+        {'params': model.transformer_encoder.layers[7].parameters(), 'lr': 3 * lr_init},
+        # {'params': model.transformer_encoder.layers[8].parameters(), 'lr': 4 * lr_init},
+        # {'params': model.transformer_encoder.layers[9].parameters(), 'lr': 4 * lr_init},
+        # {'params': model.transformer_encoder.layers[10].parameters(), 'lr': 4 * lr_init},
+        # {'params': model.transformer_encoder.layers[11].parameters(), 'lr': 4 * lr_init},
+        {'params': model.decoder.parameters(), 'lr': 5 * lr_init},
     ]
     # for layer_num in range(n_layers-2):
     #     for param in model.transformer_encoder.layers[layer_num].parameters():
     #         param.requires_grad = False
-    model.decoder_finetune.weight.data.uniform_(-0.15, 0.15)
-    model.decoder_finetune.bias.data.zero_()
+    model.decoder.weight.data.uniform_(-0.15, 0.15)
+    model.decoder.bias.data.zero_()
 
     for name, param in model.named_parameters():
         if param.requires_grad:
@@ -511,8 +516,8 @@ def evaluate(dataset="TUSZ"):
     model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len,
                            n_layers=n_layers,
                            n_out=n_out, device=device, segments=segment).to(device)
-    # load_path = '../output/finetuned_quantile_model{}_n{}_best_f1optimized'.format(300, n_layers)
-    load_path = '../output/model{}_{}_{}_scratch_quantile_best_f1optimized'.format(300, n_layers, dataset)
+    load_path = '../output/finetuned_bandpower1e4_model{}_n{}'.format(300, n_layers)
+    # load_path = '../output/model{}_{}_{}_scratch_bandpower1e4'.format(300, n_layers, dataset)
     model.load_state_dict(torch.load(load_path), strict=True)
 
     print(model)
@@ -540,10 +545,21 @@ def evaluate(dataset="TUSZ"):
                 x, y = x.to(device), y.to(device)
                 x = torch.transpose(x, 0, 1)
                 outputs = model(x)[-1, :, 0]
+                predicted = torch.sigmoid(outputs)
+
+                # true_label = batch['y'].detach().cpu().item()
+                # if (predicted.detach().cpu().item() > best_th_init) != (true_label == 1):
+                #     plt.subplots(2,1, figsize=(6,12))
+                #     plt.subplot(211)
+                #     plt.title("Predict: {:.2f}, true: {}".format(predicted.detach().cpu().item(), true_label))
+                #     plt.plot(y.squeeze().cpu().numpy())
+                #     plt.subplot(212)
+                #     sns.heatmap(x.squeeze().cpu().numpy().transpose(), cmap="magma_r", vmin=-4, vmax=4)
+                #     plt.show()
+
                 # print('output shape: {}'.format(outputs.shape))
                 # the class with the highest energy is what we choose as prediction
                 # _, predicted = torch.max(outputs.data, 1)
-                predicted = torch.sigmoid(outputs)
                 # print('predicted: {}'.format(predicted))
                 test_predict += predicted.tolist()
                 test_labels += y.view(-1, ).tolist()
@@ -615,8 +631,11 @@ def evaluate_pretraining(dataset='TUSZ', visualization=False):
                                             sample_time['train'])
     sampler = EvaluateSampler(torch.from_numpy(valid_labels['train']).int(), overlap=60)
     train_loader = DataLoader(train_set, batch_size=1, sampler=sampler)
-    model.load_state_dict(
-        torch.load('../output/pretrain_bandpower1e4_model{}_n{}_{}_best'.format(300, n_layers, dataset)), strict=False)
+
+    # load_path = '../output/pretrain_bandpower1e4_model{}_n{}_{}_best'.format(300, n_layers, dataset)
+    load_path = '../output/model{}_{}_{}_scratch_bandpower1e4_best'.format(300, n_layers, dataset)
+
+    model.load_state_dict(torch.load(load_path), strict=False)
 
     validation_set = PatientDiscriminatorEvaluationDataset(torch.from_numpy(X["val"]).float(), pat_start_end['val'],
                                                            torch.from_numpy(minute_labels['val']).int(),
@@ -728,8 +747,8 @@ def visualize_model():
 
 
 if __name__ == '__main__':
-    # pretrain("TUSZ")
+    pretrain("TUSZ")
     # evaluate()
-    # train_scratch(dataset="TUSZ")
+    train_scratch(dataset="TUSZ")
     # evaluate_pretraining(visualization=False)
     finetune()
