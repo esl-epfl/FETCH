@@ -19,6 +19,7 @@ from sklearn.preprocessing import QuantileTransformer
 from sklearn.metrics import confusion_matrix, f1_score, roc_auc_score, accuracy_score, precision_score, recall_score
 from utils.BioT import SEQ_LEN, SEGMENT, ROI
 from utils.params import dataset_parameter
+from utils.params import feature_noise_threshold
 from utils.metrics import thresh_max_f1
 
 
@@ -91,18 +92,23 @@ def get_data(pretrain_mode=False, dataset='TUSZ'):
     pat_start_end = {'train': {new_list: [] for new_list in range(30)},
                      'test': {new_list: [] for new_list in range(30)},
                      'val': {new_list: [] for new_list in range(30)}}
+    feature_name= ['meanAmpl', 'LL', 'p_delta', 'p_theta', 'p_alfa', 'p_beta', 'ZC standard', '16', '32', '64', '128', '256']
     for mode in ['train', 'val', 'test']:
         total_len = 0
         start_index = 0
         for t_file in total_dataset[mode]:
             with open(rootdir + '/{}_band_mean_ll.pickle'.format(t_file), 'rb') as pickle_file:
                 band_data = pickle.load(pickle_file)
+                for i in range(band_data.shape[1]):
+                    band_data[:, i] = np.where(band_data[:, i] > feature_noise_threshold[i%6], np.nan, band_data[:, i])
                 band_data = np.pad(band_data, ((0, 1), (0, 0)))
                 X[mode][start_index:start_index + band_data.shape[0], :band_feature_size] = band_data
 
             with open(rootdir + '/{}_zc.pickle'.format(t_file), 'rb') as pickle_file:
                 # print(t_file)
                 data = pickle.load(pickle_file)
+                for i in range(data.shape[1]):
+                    data[:, i] = np.where(data[:, i] > feature_noise_threshold[i%6 + 6], np.nan, data[:, i])
                 data = np.pad(data, ((0, 1), (0, 0)))
                 assert data.shape[0] == band_data.shape[0], \
                     "Band power feature length {} is not equal to zero crossing {}".format(data.shape[0],
@@ -136,12 +142,27 @@ def get_data(pretrain_mode=False, dataset='TUSZ'):
     print(X["val"].shape)
     print(X["test"].shape)
 
-    mean_train = np.mean(X["train"], axis=0)[None, ...]
+    X_reshaped = X["train"].reshape((-1,2,21,6))
+    X_transposed = np.transpose(X_reshaped, (0,2, 1, 3))
+    X_reshaped = X_transposed.reshape((-1, 12))
+    # for i in range(12):
+    #     plt.figure()
+    #     plt.xscale('log')
+    #     plt.hist(x =X_reshaped[:, i], bins=np.logspace(start=np.log10(1e-4), stop=np.log10(1e8), num=100), log=True)
+    #     plt.title(feature_name[i])
+    #     plt.show()
+    mean_train = np.nanmean(X["train"], axis=0)[None, ...]
     print("Mean shape: {} -> {}".format(X["train"].shape, mean_train.shape))
-    std_train = np.std(X["train"], axis=0)[None, ...]
+    std_train = np.nanstd(X["train"], axis=0)[None, ...]
     X["train"] = (X["train"] - mean_train) / std_train
     X["val"] = (X["val"] - mean_train) / std_train
     X["test"] = (X["test"] - mean_train) / std_train
+
+    print("maximum", np.nanmax(X["train"]))
+    X["train"] = np.nan_to_num(X["train"], nan=1.1*np.nanmax(X["train"]))
+    X["val"] = np.nan_to_num(X["val"], nan=1.1*np.nanmax(X["train"]))
+    X["test"] = np.nan_to_num(X["test"], nan=1.1*np.nanmax(X["train"]))
+    print("new maximum", np.max(X["train"]))
 
     print(valid_labels["test"].shape)
     return X, labels, minute_labels, pat_start_end, sample_time, valid_labels
@@ -509,15 +530,15 @@ def evaluate(dataset="TUSZ"):
     d_hid = 4 * d_model
     seq_len = SEQ_LEN + 3
     segment = SEGMENT
-    n_layers = 12
+    n_layers = 4
     n_out = 1
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print('device : ', device)
     model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len,
                            n_layers=n_layers,
                            n_out=n_out, device=device, segments=segment).to(device)
-    load_path = '../output/finetuned_bandpower1e4_model{}_n{}'.format(300, n_layers)
-    # load_path = '../output/model{}_{}_{}_scratch_bandpower1e4'.format(300, n_layers, dataset)
+    load_path = '../output/finetuned_model{}_n{}_best'.format(300, n_layers)
+    # load_path = '../output/model{}_{}_{}_scratch_best'.format(300, n_layers, dataset)
     model.load_state_dict(torch.load(load_path), strict=True)
 
     print(model)
@@ -532,7 +553,7 @@ def evaluate(dataset="TUSZ"):
         test_set = Epilepsy60Dataset(torch.from_numpy(X_test).float(), torch.from_numpy(Y).long(),
                                      torch.from_numpy(sample_time_test).long())
         test_sampler = EvaluateSampler(torch.from_numpy(valid_labels[mode]).int(), overlap=1)
-        test_loader = DataLoader(test_set, batch_size=32, shuffle=False, sampler=test_sampler)
+        test_loader = DataLoader(test_set, batch_size=1, shuffle=False, sampler=test_sampler)
 
         model.eval()
         test_predict = []
@@ -546,23 +567,17 @@ def evaluate(dataset="TUSZ"):
                 x = torch.transpose(x, 0, 1)
                 outputs = model(x)[-1, :, 0]
                 predicted = torch.sigmoid(outputs)
-
-                # true_label = batch['y'].detach().cpu().item()
-                # if (predicted.detach().cpu().item() > best_th_init) != (true_label == 1):
-                #     plt.subplots(2,1, figsize=(6,12))
-                #     plt.subplot(211)
-                #     plt.title("Predict: {:.2f}, true: {}".format(predicted.detach().cpu().item(), true_label))
-                #     plt.plot(y.squeeze().cpu().numpy())
-                #     plt.subplot(212)
-                #     sns.heatmap(x.squeeze().cpu().numpy().transpose(), cmap="magma_r", vmin=-4, vmax=4)
-                #     plt.show()
-
-                # print('output shape: {}'.format(outputs.shape))
-                # the class with the highest energy is what we choose as prediction
-                # _, predicted = torch.max(outputs.data, 1)
-                # print('predicted: {}'.format(predicted))
                 test_predict += predicted.tolist()
                 test_labels += y.view(-1, ).tolist()
+
+                if mode == "val":
+                    continue
+
+                if (predicted.detach().cpu().item() > best_th_init) != (y.detach().cpu().item() == 1):
+                    plt.figure(figsize=(6,12))
+                    plt.title("Predict: {:.2f}, true: {}".format(predicted.detach().cpu().item(), y.detach().cpu().item()))
+                    sns.heatmap(x.squeeze().cpu().numpy().transpose(), cmap="magma_r", vmax=31)
+                    plt.show()
 
         if mode == "val":
             best_thresh = thresh_max_f1(y_true=test_labels, y_prob=test_predict)
@@ -747,8 +762,8 @@ def visualize_model():
 
 
 if __name__ == '__main__':
-    pretrain("TUSZ")
-    # evaluate()
-    train_scratch(dataset="TUSZ")
+    # pretrain("TUSZ")
+    evaluate()
+    # train_scratch(dataset="TUSZ")
     # evaluate_pretraining(visualization=False)
-    finetune()
+    # finetune()

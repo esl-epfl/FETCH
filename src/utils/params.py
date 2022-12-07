@@ -99,3 +99,18 @@ dataset_parameter = {"TUSZ": {
     }
 }
 
+feature_noise_threshold = {
+    0: 500*5,  # Mean Amp
+    1: 10*5,  # LL
+    2: 1000*5,  # delta
+    3: 1000*5,  # theta
+    4: 1000*5,  # alpha
+    5: 1000*5,  # beta
+    6: 100*5,  # ZC standard
+    7: 30*5,  # ZC 16
+    8: 20*5,  # ZC 32
+    9: 10*5,  # ZC 64
+    10: 10*5,  # ZC 128
+    11: 10*5,  # ZC 256
+}
+
