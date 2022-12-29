@@ -1,46 +1,74 @@
 import pyedflib
 import numpy as np
-
-labels_standard = ['Fc5.', 'Fc3.', 'Fc1.', 'Fcz.', 'Fc2.', 'Fc4.', 'Fc6.', 'C5..', 'C3..', 'C1..', 'Cz..', 'C2..',
-                   'C4..', 'C6..', 'Cp5.', 'Cp3.', 'Cp1.', 'Cpz.', 'Cp2.', 'Cp4.', 'Cp6.', 'Fp1.', 'Fpz.', 'Fp2.',
-                   'Af7.', 'Af3.', 'Afz.', 'Af4.', 'Af8.', 'F7..', 'F5..', 'F3..', 'F1..', 'Fz..', 'F2..', 'F4..',
-                   'F6..', 'F8..', 'Ft7.', 'Ft8.', 'T7..', 'T8..', 'T9..', 'T10.', 'Tp7.', 'Tp8.', 'P7..', 'P5..',
-                   'P3..', 'P1..', 'Pz..', 'P2..', 'P4..', 'P6..', 'P8..', 'Po7.', 'Po3.', 'Poz.', 'Po4.', 'Po8.',
-                   'O1..', 'Oz..', 'O2..', 'Iz..']
+import pandas as pd
+from utils.params import TUSZ_BENDR_channels, BENDR_channels
+import json
 
 
-def convert_signal():
-    f = pyedflib.EdfReader("../../input/chb-mit-bendr/s005/chb02_30.edf")
+def get_annotation(filename, df):
+    '''
+    Args:
+        filename:
+        df:
+
+    Returns:
+
+    '''
+    row = df.loc[filename.split('/')[-1]]
+    print(row)
+    print(row['onsets'])
+    fs = row['fs_FP1']
+    onsets = [float(int(x[0]))/fs for x in row['onsets']]
+    offsets = [float(int(x[0]))/fs for x in row['offsets']]
+    length = row['length']/fs
+    annotation = []
+    if len(offsets) == 1 and offsets[0] == 0:  # Totally non-seizure
+        annotation.append((0, length, 'T0'))
+        return annotation
+    else:
+        if onsets[0] != 0:
+            annotation.append((0, onsets[0], 'T0'))
+        for i in range(len(onsets)-1):
+            on_time = onsets[i]
+            on_time_next = onsets[i+1]
+            off_time = offsets[i]
+            annotation.append((on_time, off_time, 'T1'))
+            annotation.append((off_time, on_time_next, 'T0'))
+        annotation.append((onsets[-1], offsets[-1], 'T1'))
+        if offsets[-1] != length:
+            annotation.append((offsets[-1],length, 'T0'))
+        print(annotation)
+        return annotation
+
+
+def convert_signal(filename, df):
+    f = pyedflib.EdfReader(filename + ".edf")
     signal_labels = f.getSignalLabels()
-    num_channels = len(signal_labels)
+    valid_channels = []
+    for idx, lbl in enumerate(signal_labels):
+        if lbl in TUSZ_BENDR_channels.keys():
+            valid_channels.append(idx)
+    num_channels = len(valid_channels)
+    assert num_channels != 0, "Number of valid channels is zero!"
 
-    f_w = pyedflib.EdfWriter("../../input/chb-mit-bendr/s005/chb02_30_new.edf", num_channels,
+    f_w = pyedflib.EdfWriter(filename + "_annotated.edf", num_channels,
                              file_type=pyedflib.FILETYPE_EDFPLUS)
     data_list = []
-    for ch in range(num_channels):
-        f_w.setDigitalMaximum(ch, f.getDigitalMaximum(ch))
-        f_w.setDigitalMinimum(ch, f.getDigitalMinimum(ch))
-        f_w.setPhysicalMaximum(ch, f.getPhysicalMaximum(ch))
-        f_w.setPhysicalMinimum(ch, f.getPhysicalMinimum(ch))
-        # f_w.setLabel(ch, f.getLabel(ch))
-        f_w.setLabel(ch, labels_standard[ch])
-        # f_w.setSignalHeader(ch, f.getSignalHeader(ch))
-        f_w.setSamplefrequency(ch, f.getSampleFrequency(ch))
+    for write_ch, ch in enumerate(valid_channels):
+        f_w.setDigitalMaximum(write_ch, f.getDigitalMaximum(ch))
+        f_w.setDigitalMinimum(write_ch, f.getDigitalMinimum(ch))
+        f_w.setPhysicalMaximum(write_ch, f.getPhysicalMaximum(ch))
+        f_w.setPhysicalMinimum(write_ch, f.getPhysicalMinimum(ch))
+        # f_w.setLabel(write_ch, BENDR_channels[write_ch])
+        f_w.setLabel(write_ch, TUSZ_BENDR_channels[f.getLabel(ch)])
+        f_w.setSamplefrequency(write_ch, f.getSampleFrequency(ch))
         data_list.append(f.readSignal(ch))
 
-    onset, dur, desc = [0., 4.2, 8.3, 12.5, 16.6, 20.8, 24.9, 29.1, 33.2,
-                        37.4, 41.5, 45.7, 49.8, 54., 58.1, 62.3, 66.4, 70.6,
-                        74.7, 78.9, 83., 87.2, 91.3, 95.5, 99.6, 103.8, 107.9,
-                        112.1, 116.2, 120.4], [4.2, 4.1, 4.2, 4.1, 4.2, 4.1, 4.2, 4.1, 4.2, 4.1, 4.2, 4.1, 4.2,
-                                               4.1, 4.2, 4.1, 4.2, 4.1, 4.2, 4.1, 4.2, 4.1, 4.2, 4.1, 4.2, 4.1,
-                                               4.2, 4.1, 4.2, 4.1], ['T0', 'T2', 'T0', 'T1', 'T0', 'T1', 'T0', 'T2',
-                                                                     'T0', 'T2', 'T0',
-                                                                     'T1', 'T0', 'T2', 'T0', 'T1', 'T0', 'T2', 'T0',
-                                                                     'T1', 'T0', 'T1',
-                                                                     'T0', 'T2', 'T0', 'T1', 'T0', 'T2', 'T0', 'T1']
-    for i in range(len(onset)):
-        f_w.writeAnnotation(onset[i], dur[i], desc[i])
-
+    annotation = get_annotation(filename, df)
+    for annot in annotation:
+        f_w.writeAnnotation(annot[0], annot[1], annot[2])
+    print('min', np.min(data_list))
+    print('max', np.max(data_list))
     f_w.writeSamples(data_list)
 
     f.close()
@@ -60,5 +88,15 @@ def read_signal(filename):
 
 
 if __name__ == '__main__':
-    convert_signal()
-    read_signal("../../input/chb-mit-bendr/s005/chb02_30_new.edf")
+    # convert_signal("../../input/chb-mit-bendr/s005/chb02_30.edf")
+    # read_signal("../../input/chb-mit-bendr/s005/chb02_30_new.edf")
+    df = pd.read_csv('../../input/TUSZ/TUSZ_labels.csv')
+    df['onsets'] = df['onsets'].apply(lambda x: json.loads(x.replace('\n', ',')))
+    df['offsets'] = df['offsets'].apply(lambda x: json.loads(x.replace('\n', ',')))
+    df = df.set_index('file_name_edf')
+    print(df[df['onsets'].apply(lambda x: len(x) > 1)]['file_name'])
+    for i in [4, 7, 9, 10, 16]:
+        file = "/home/amirshah/EPFL/BENDR/data/TUSZ/edf/train/03_tcp_ar_a/130/00013085/s002_2015_10_05/00013085_s002_t0{:02d}".format(i)
+        print(file)
+        convert_signal(file, df)
+    # read_signal(file + "_annotated.edf")

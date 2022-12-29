@@ -58,8 +58,29 @@ EEG_channels = ['EEG FP1-REF', 'EEG FP2-REF', 'EEG F3-REF', 'EEG F4-REF', 'EEG C
                 'EEG T5-REF', 'EEG T6-REF', 'EEG A1-REF', 'EEG A2-REF', 'EEG FZ-REF', 'EEG CZ-REF', 'EEG PZ-REF']
 
 EEG_channels_LE = ['EEG FP1-LE', 'EEG FP2-LE', 'EEG F3-LE', 'EEG F4-LE', 'EEG C3-LE', 'EEG C4-LE', 'EEG P3-LE',
-                'EEG P4-LE', 'EEG O1-LE', 'EEG O2-LE', 'EEG F7-LE', 'EEG F8-LE', 'EEG T3-LE', 'EEG T4-LE',
-                'EEG T5-LE', 'EEG T6-LE', 'EEG A1-LE', 'EEG A2-LE', 'EEG FZ-LE', 'EEG CZ-LE', 'EEG PZ-LE']
+                   'EEG P4-LE', 'EEG O1-LE', 'EEG O2-LE', 'EEG F7-LE', 'EEG F8-LE', 'EEG T3-LE', 'EEG T4-LE',
+                   'EEG T5-LE', 'EEG T6-LE', 'EEG A1-LE', 'EEG A2-LE', 'EEG FZ-LE', 'EEG CZ-LE', 'EEG PZ-LE']
+
+BENDR_channels = ['Fc5.', 'Fc3.', 'Fc1.', 'Fcz.', 'Fc2.', 'Fc4.', 'Fc6.', 'C5..', 'C3..', 'C1..', 'Cz..', 'C2..',
+                  'C4..', 'C6..', 'Cp5.', 'Cp3.', 'Cp1.', 'Cpz.', 'Cp2.', 'Cp4.', 'Cp6.', 'Fp1.', 'Fpz.', 'Fp2.',
+                  'Af7.', 'Af3.', 'Afz.', 'Af4.', 'Af8.', 'F7..', 'F5..', 'F3..', 'F1..', 'Fz..', 'F2..', 'F4..',
+                  'F6..', 'F8..', 'Ft7.', 'Ft8.', 'T7..', 'T8..', 'T9..', 'T10.', 'Tp7.', 'Tp8.', 'P7..', 'P5..',
+                  'P3..', 'P1..', 'Pz..', 'P2..', 'P4..', 'P6..', 'P8..', 'Po7.', 'Po3.', 'Poz.', 'Po4.', 'Po8.',
+                  'O1..', 'Oz..', 'O2..', 'Iz..']
+
+TUSZ_BENDR_channels = {'EEG FP1-REF': 'Fp1.', 'EEG FP2-REF': 'Fp2.', 'EEG F3-REF': 'F3..', 'EEG F4-REF': 'F4..',
+                       'EEG C3-REF': 'C3..', 'EEG C4-REF': 'C4..', 'EEG P3-REF': 'P3..', 'EEG P4-REF': 'P4..',
+                       'EEG O1-REF': 'O1..', 'EEG O2-REF': 'O2..', 'EEG F7-REF': 'F7..', 'EEG F8-REF': 'F8..',
+                       'EEG T3-REF': 'T7..', 'EEG T4-REF': 'T8..', 'EEG T5-REF': 'P7..', 'EEG T6-REF': 'P8..',
+                       'EEG A1-REF': 'A1..', 'EEG A2-REF': 'A2..', 'EEG FZ-REF': 'Fz..', 'EEG CZ-REF': 'Cz..',
+                       'EEG PZ-REF': 'Pz..',
+                       'EEG FP1-LE': 'Fp1.', 'EEG FP2-LE': 'Fp2.', 'EEG F3-LE': 'F3..', 'EEG F4-LE': 'F4..',
+                       'EEG C3-LE': 'C3..', 'EEG C4-LE': 'C4..', 'EEG P3-LE': 'P3..', 'EEG P4-LE': 'P4..',
+                       'EEG O1-LE': 'O1..', 'EEG O2-LE': 'O2..', 'EEG F7-LE': 'F7..', 'EEG F8-LE': 'F8..',
+                       'EEG T3-LE': 'T7..', 'EEG T4-LE': 'T8..', 'EEG T5-LE': 'P7..', 'EEG T6-LE': 'P8..',
+                       'EEG A1-LE': 'A1..', 'EEG A2-LE': 'A2..', 'EEG FZ-LE': 'Fz..', 'EEG CZ-LE': 'Cz..',
+                       'EEG PZ-LE': 'Pz..'
+                       }
 
 # feature_size = 126 if dataset == "TUSZ" else 144
 # train_len = 3050138 if dataset == "TUSZ" else 15060645
@@ -100,17 +121,16 @@ dataset_parameter = {"TUSZ": {
 }
 
 feature_noise_threshold = {
-    0: 500*5,  # Mean Amp
-    1: 10*5,  # LL
-    2: 1000*5,  # delta
-    3: 1000*5,  # theta
-    4: 1000*5,  # alpha
-    5: 1000*5,  # beta
-    6: 100*5,  # ZC standard
-    7: 30*5,  # ZC 16
-    8: 20*5,  # ZC 32
-    9: 10*5,  # ZC 64
-    10: 10*5,  # ZC 128
-    11: 10*5,  # ZC 256
+    0: 500 * 5,  # Mean Amp
+    1: 10 * 5,  # LL
+    2: 1000 * 5,  # delta
+    3: 1000 * 5,  # theta
+    4: 1000 * 5,  # alpha
+    5: 1000 * 5,  # beta
+    6: 100 * 5,  # ZC standard
+    7: 30 * 5,  # ZC 16
+    8: 20 * 5,  # ZC 32
+    9: 10 * 5,  # ZC 64
+    10: 10 * 5,  # ZC 128
+    11: 10 * 5,  # ZC 256
 }
-
