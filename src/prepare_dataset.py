@@ -1,14 +1,24 @@
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import scipy.io, scipy.integrate
+from scipy.signal import resample
 import os
 import pickle
 # from eglass import calculateMLfeatures
 from utils.params import pat_file_list, EEG_channels, EEG_channels_LE
 import pyedflib
+from tqdm import tqdm
+
+from scipy import signal
+from os import listdir
+from os.path import isfile, join
+import sys
+import json
+import seaborn as sns
 
 # fs = 250
-TUSZ_folder = "dev/02_tcp_le"
+TUSZ_folder = "dev/01_tcp_ar"
 
 
 def zero_crossings(arr):
@@ -23,35 +33,36 @@ def bandpower(f, Pxx, fmin, fmax):
 
 
 def calculateOtherMLfeatures_oneCh(X, fs):
-    numFeat = 6 #54 from Sopic2018 and LL and meanAmpl
-    lenSig= len(X)
+    numFeat = 5  # 4 from Sopic2018 and LL and meanAmpl
+    lenSig = len(X)
     segLenIndx = int(4 * fs)  # length of EEG segments in samples
     slidWindStepIndx = int(1 * fs)  # step of slidin window to extract segments in samples
-    index = np.arange(0, lenSig - segLenIndx, slidWindStepIndx).astype(int)
+    index = np.arange(0, lenSig - segLenIndx + slidWindStepIndx, slidWindStepIndx).astype(int)
 
-    featureValues=np.zeros((len(index), numFeat))
+    featureValues = np.zeros((len(index), numFeat))
     for i in range(len(index)):
         sig = X[index[i]:index[i] + segLenIndx]
+        if len(sig) != segLenIndx: print("Error in signal length!")
         f, Pxx = scipy.signal.periodogram(sig, fs=fs)
         p_delta = bandpower(f, Pxx, 0.5, 4)
         p_theta = bandpower(f, Pxx, 4, 8)
         p_alfa = bandpower(f, Pxx, 8, 13)
         p_beta = bandpower(f, Pxx, 13, 30)
-        meanAmpl = np.mean(np.abs(sig))
         LL = np.mean(np.abs(np.diff(sig)))
-        featureValues[i, :] = np.hstack((meanAmpl, LL, p_delta, p_theta, p_alfa, p_beta))
+        featureValues[i, :] = np.hstack((LL, p_delta, p_theta, p_alfa, p_beta))
     return featureValues
 
 
 def calculateMovingAvrgMeanWithUndersampling_v2(data, winLen, winStep):
-    lenSig=len(data)
-    index = np.arange(0, lenSig - winLen, winStep)
+    lenSig = len(data)
+    index = np.arange(0, lenSig - winLen + winStep, winStep)
 
     segmData = np.zeros(len(index))
-    for i in range(len(index)): #-1
+    for i in range(len(index)):  # -1
         x = data[index[i]:index[i] + winLen]
-        segmData[i]=np.mean(x)
-    return(segmData)
+        segmData[i] = np.mean(x)
+    return (segmData)
+
 
 def polygonal_approx(arr, epsilon):
     """
@@ -59,6 +70,7 @@ def polygonal_approx(arr, epsilon):
     an array of single values, considered consecutive points, and **taking into account only the
     vertical distances**.
     """
+
     def max_vdist(arr, first, last):
         """
         Obtains the distance and the index of the point in *arr* with maximum vertical distance to
@@ -66,11 +78,11 @@ def polygonal_approx(arr, epsilon):
         """
         if first == last:
             return (0.0, first)
-        frg = arr[first:last+1]
-        leng = last-first+1
-        dist = np.abs(frg - np.interp(np.arange(leng),[0, leng-1], [frg[0], frg[-1]]))
+        frg = arr[first:last + 1]
+        leng = last - first + 1
+        dist = np.abs(frg - np.interp(np.arange(leng), [0, leng - 1], [frg[0], frg[-1]]))
         idx = np.argmax(dist)
-        return (dist[idx], first+idx)
+        return (dist[idx], first + idx)
 
     if epsilon <= 0.0:
         raise ValueError('Epsilon must be > 0.0')
@@ -82,7 +94,7 @@ def polygonal_approx(arr, epsilon):
         first, last = stack.pop()
         max_dist, idx = max_vdist(arr, first, last)
         if max_dist > epsilon:
-            stack.extend([(first, idx),(idx, last)])
+            stack.extend([(first, idx), (idx, last)])
         else:
             result.update((first, last))
     return np.array(sorted(result))
@@ -98,39 +110,36 @@ def get_EEG_index(eeg_labels):
         else:
             indices.append(-1)
     return indices
-#%%
 
 
-from scipy import signal
-from os import listdir
-from os.path import isfile, join
-import sys
+def get_full_path(x):
+    mode, tcp, pat_group, pat_s_t = x.split('/')
+    pat, s, _ = pat_s_t.split('_')
+
+    s_fullname = [filename for filename in os.listdir("/scrap/users/amirshah/epilepsyTrans/TUSZ/edf/{}/{}/{}/{}/".format(mode, tcp, pat_group, pat)) if
+     filename.startswith(s)]
+    assert len(s_fullname) == 1, "Error {}".format(s_fullname)
+    return "{}/{}/{}/{}/{}/{}".format(mode, tcp, pat_group, pat, s_fullname[0], pat_s_t)
+
+
+def get_filename_list(pat_num):
+    df = pd.read_csv('../TUSZ/TUSZ_labels.csv')
+    df['onsets'] = df['onsets'].apply(lambda x: json.loads(x.replace('\n', ',')))
+    df['offsets'] = df['offsets'].apply(lambda x: json.loads(x.replace('\n', ',')))
+    df = df.set_index('file_name_edf')
+    pd.set_option('max_columns', None)
+
+    df['full_path'] = df['file_name'].apply(get_full_path)
+    df = df[df['file_name'].apply(lambda x: x.startswith("{}/{}".format(TUSZ_folder, pat_num)))]
+    return df['full_path'].tolist()
 
 
 def main():
-    print(sys.argv)
     pat_num = sys.argv[1]
-    filenames_list = []
-    # dir_total_files = '../TUSZ/edf/{}/{}'.format(TUSZ_folder, pat_num)
-    # for dev_train in ["dev", "train"]:
-    #     for dir_tcp in ["01_tcp_ar", "02_tcp_le", "03_tcp_ar_a"]:
-    #         TUSZ_folder = "{}/{}".format(dev_train, dir_tcp)
-            # dir_total_pats = '../TUSZ/edf/{}'.format(TUSZ_folder)
-            # for pat_num in listdir(dir_total_pats):
-    dir_total_files = '../TUSZ/edf/{}/{}'.format(TUSZ_folder, pat_num)
-    for subdir in listdir(dir_total_files):
-        for subsubdir in listdir(join(dir_total_files, subdir)):
-            filenames_list += [join(dir_total_files, subdir, subsubdir, edf_file) for edf_file
-                               in listdir(join(dir_total_files, subdir, subsubdir)) if edf_file.endswith('.edf')]
-    print(filenames_list)
-
-    # dir_output = '../TUSZ_zc/{}/{}'.format(TUSZ_folder, pat_num)
-
-    # file_prepared = [f.split('_zc.pickle')[0] for f in listdir(dir_output) if isfile(join(dir_output, f))]
-    # print(file_prepared)
-
-    filename_fs_dict = {}
-
+    filenames_list = get_filename_list(pat_num)
+    # for filename in tqdm(filenames_list, desc="Files", position=0, leave=True):
+    # dir_output = '../input/TUSZ_12feat/{}/{}/'.format(TUSZ_folder, pat_num)
+    # file_prepared = [f.split('_band_zc.pickle')[0] for f in listdir(dir_output) if isfile(join(dir_output, f))]
     for filename in filenames_list:
         # if filename in pat_file_list:
         #     continue
@@ -138,15 +147,13 @@ def main():
         #     print("{} is already prepared.".format(filename))
         #     continue
         print(filename)
-        # data = scipy.io.loadmat('{}/{}'.format(dir_total_files, filename))
-        # signals = data['Signals']
-        f = pyedflib.EdfReader(filename)
+        f = pyedflib.EdfReader(join("../TUSZ/edf/", filename))
         signal_labels = f.getSignalLabels()
         indices = get_EEG_index(signal_labels)
         signal_shape = f.readSignal(0).shape
         sample_frequency = f.getSampleFrequencies()
-        filename_fs_dict[filename] = {'fs': sample_frequency, 'ch': signal_labels}
-        print('Frequency: {}'.format(sample_frequency))
+        duration = f.getFileDuration()
+        # filename_fs_dict[filename] = {'fs': sample_frequency, 'ch': signal_labels}
         fs = int(sample_frequency[0])
 
         signals = np.zeros((len(EEG_channels), signal_shape[0]))
@@ -155,41 +162,57 @@ def main():
                 continue
             signals[row, :] = f.readSignal(EEG_index)
 
-        sos = signal.butter(4, [1, 20], 'bandpass', fs=fs, output='sos')
+        sos = signal.butter(4, [0.2, 50], 'bandpass', fs=fs, output='sos')
         allsigFilt = signal.sosfiltfilt(sos, signals, axis=1)
 
-        #%%
+        # %%
         numCh = len(EEG_channels)
-        num_feat = 6
+        num_feat = 12
         win_len = 4
-        EPS_thresh_arr=[16, 32, 64, 128, 256]
-        length = int(allsigFilt.shape[1] // fs) - win_len
+        eps = 1e-6
+        EPS_thresh_arr = [0.01, 0.04, 0.1, 0.4, 0.8]
+        length = int(allsigFilt.shape[1] // fs) - win_len + 1
 
+        valid_num_samples = (allsigFilt.shape[1] // fs) * fs
 
-        # zeroCrossStandard = np.zeros((length, numCh))
-        # zeroCrossApprox = np.zeros((length, numCh))
-        # zeroCrossFeaturesAll = np.zeros((length, num_feat * numCh))
+        scaleFactor = np.max(allsigFilt, axis=1, keepdims=True) - np.min(allsigFilt, axis=1, keepdims=True)
+        allSigScaled = (allsigFilt - np.min(allsigFilt, axis=1, keepdims=True)) / (scaleFactor + eps)
+        allSigScaled = allSigScaled * 2 - 1
+
+        all_features = np.zeros((length, num_feat * numCh))  # Zero-crossing, band powers, LL, and scale_factor
 
         for ch in range(numCh):
-            sigFilt=allsigFilt[ch, :(allsigFilt.shape[1] // fs)*fs]
+            sigFiltScaled = allSigScaled[ch, :valid_num_samples]
+            new_fs = 256
+            new_num_samples = (allsigFilt.shape[1] // fs) * new_fs
+            sigFiltScaledResampled = resample(sigFiltScaled, new_num_samples)
 
-            featOther = calculateOtherMLfeatures_oneCh(np.copy(sigFilt), fs)
-            if (ch == 0):
-                AllFeatures = featOther
-            else:
-                AllFeatures = np.hstack((AllFeatures, featOther))
+            featOther = calculateOtherMLfeatures_oneCh(np.copy(sigFiltScaledResampled), new_fs)
+            all_features[:, ch*num_feat] = scaleFactor[ch] / 5000
+            all_features[:, ch*num_feat+1:ch*num_feat+6] = featOther
 
-            # x = np.convolve(zero_crossings(sigFilt), np.ones(fs), mode='same')
-            # zeroCrossStandard = calculateMovingAvrgMeanWithUndersampling_v2(x, fs * 4, fs)
-            # zeroCrossFeaturesAll[:, num_feat * ch] = zeroCrossStandard
-            # for EPSthrIndx, EPSthr in enumerate(EPS_thresh_arr):
-            #     sigApprox = polygonal_approx(sigFilt, epsilon=EPSthr)
-            #     sigApproxInterp = np.interp(np.arange(len(sigFilt)), sigApprox, sigFilt[sigApprox])
-            #     x = np.convolve(zero_crossings(sigApproxInterp), np.ones(fs), mode='same')
-            #     zeroCrossApprox = calculateMovingAvrgMeanWithUndersampling_v2(x, fs *4 , fs)
-            #     zeroCrossFeaturesAll[:, num_feat * ch + EPSthrIndx + 1] = zeroCrossApprox
-        with open('../input/TUSZ_zc/{}/{}/{}_band_mean_ll.pickle'.format(TUSZ_folder, pat_num, filename.split('/')[-1]), 'wb') as zc_file:
-            pickle.dump(AllFeatures, zc_file)
+            x = np.convolve(zero_crossings(sigFiltScaledResampled), np.ones(new_fs), mode='same')
+            zeroCrossStandard = calculateMovingAvrgMeanWithUndersampling_v2(x, new_fs * 4, new_fs)
+            all_features[:, ch*num_feat+6] = zeroCrossStandard
+            for EPSthrIndx, EPSthr in enumerate(EPS_thresh_arr):
+                sigApprox = polygonal_approx(sigFiltScaledResampled, epsilon=EPSthr)
+                sigApproxInterp = np.interp(np.arange(len(sigFiltScaledResampled)), sigApprox, sigFiltScaledResampled[sigApprox])
+                x = np.convolve(zero_crossings(sigApproxInterp), np.ones(new_fs), mode='same')
+                zeroCrossApprox = calculateMovingAvrgMeanWithUndersampling_v2(x, new_fs *4 , new_fs)
+                all_features[:, ch*num_feat + 7 + EPSthrIndx] = zeroCrossApprox
+
+        # mean_train = np.mean(all_features, axis=0)[None, ...]
+        # print("Mean shape: {} -> {}".format(all_features.shape, mean_train.shape))
+        # std_train = np.std(all_features, axis=0)[None, ...]
+        # all_features = (all_features - mean_train) / std_train
+
+
+        # plt.figure()
+        # sns.heatmap(all_features.T, robust=True, fmt="f", cmap= 'RdBu_r')
+        # plt.show()
+
+        with open('../input/TUSZ_12feat/{}/{}/{}_band_zc.pickle'.format(TUSZ_folder, pat_num, filename.split('/')[-1]), 'wb') as zc_file:
+            pickle.dump(all_features, zc_file)
     # print(filename_fs_dict)
     # with open('../TUSZ_zc/fs.pickle', 'wb') as zc_file:
     #     pickle.dump(filename_fs_dict, zc_file)
