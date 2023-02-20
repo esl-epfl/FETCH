@@ -3,12 +3,14 @@ import numpy as np
 import pandas as pd
 import scipy.io, scipy.integrate
 from scipy.signal import resample
+from scipy.signal import stft
 import os
 import pickle
 # from eglass import calculateMLfeatures
 from utils.params import pat_file_list, EEG_channels, EEG_channels_LE
 import pyedflib
 from tqdm import tqdm
+import random
 
 from scipy import signal
 from os import listdir
@@ -18,7 +20,7 @@ import json
 import seaborn as sns
 
 # fs = 250
-TUSZ_folder = "dev/01_tcp_ar"
+TUSZ_folder = "train/03_tcp_ar_a"
 
 
 def zero_crossings(arr):
@@ -100,6 +102,68 @@ def polygonal_approx(arr, epsilon):
     return np.array(sorted(result))
 
 
+def get_Eglass_features(allsigFilt, fs):
+    # %%
+    numCh = len(EEG_channels)
+    num_feat = 12
+    win_len = 4
+    eps = 1e-6
+    EPS_thresh_arr = [0.01, 0.04, 0.1, 0.4, 0.8]
+    length = int(allsigFilt.shape[1] // fs) - win_len + 1
+
+    valid_num_samples = (allsigFilt.shape[1] // fs) * fs
+
+    scaleFactor = np.max(allsigFilt, axis=1, keepdims=True) - np.min(allsigFilt, axis=1, keepdims=True)
+    allSigScaled = (allsigFilt - np.min(allsigFilt, axis=1, keepdims=True)) / (scaleFactor + eps)
+    allSigScaled = allSigScaled * 2 - 1
+
+    all_features = np.zeros((length, num_feat * numCh))  # Zero-crossing, band powers, LL, and scale_factor
+
+    for ch in range(numCh):
+        sigFiltScaled = allSigScaled[ch, :valid_num_samples]
+        new_fs = 256
+        new_num_samples = (allsigFilt.shape[1] // fs) * new_fs
+        sigFiltScaledResampled = resample(sigFiltScaled, new_num_samples)
+
+        featOther = calculateOtherMLfeatures_oneCh(np.copy(sigFiltScaledResampled), new_fs)
+        all_features[:, ch * num_feat] = scaleFactor[ch] / 5000
+        all_features[:, ch * num_feat + 1:ch * num_feat + 6] = featOther
+
+        x = np.convolve(zero_crossings(sigFiltScaledResampled), np.ones(new_fs), mode='same')
+        zeroCrossStandard = calculateMovingAvrgMeanWithUndersampling_v2(x, new_fs * 4, new_fs)
+        all_features[:, ch * num_feat + 6] = zeroCrossStandard
+        for EPSthrIndx, EPSthr in enumerate(EPS_thresh_arr):
+            sigApprox = polygonal_approx(sigFiltScaledResampled, epsilon=EPSthr)
+            sigApproxInterp = np.interp(np.arange(len(sigFiltScaledResampled)), sigApprox,
+                                        sigFiltScaledResampled[sigApprox])
+            x = np.convolve(zero_crossings(sigApproxInterp), np.ones(new_fs), mode='same')
+            zeroCrossApprox = calculateMovingAvrgMeanWithUndersampling_v2(x, new_fs * 4, new_fs)
+            all_features[:, ch * num_feat + 7 + EPSthrIndx] = zeroCrossApprox
+
+    return all_features
+
+
+def get_stft_features(all_signal_filtered, fs):
+    length = int(all_signal_filtered.shape[1] // fs)
+    num_ch = len(EEG_channels)
+    frequency_stop = 50
+    stft_time_len = 22
+
+    valid_num_samples = (all_signal_filtered.shape[1] // fs) * fs
+    new_fs = 256
+    new_num_samples = (all_signal_filtered.shape[1] // fs) * new_fs
+    number_of_12_seconds = int(new_num_samples // (12 * new_fs))
+    all_features = np.zeros((number_of_12_seconds, num_ch, frequency_stop, stft_time_len))
+    for ch in range(num_ch):
+        single_channel_signal = all_signal_filtered[ch, :valid_num_samples]
+        single_channel_signal = resample(single_channel_signal, new_num_samples)
+        for i in range(number_of_12_seconds):
+            f, t, Zxx = stft(single_channel_signal[i*12*new_fs: (i+1)*12*new_fs], fs=2.0, nperseg=250, noverlap=100)
+            all_features[i, ch, :, :] = np.abs(Zxx)[:frequency_stop, :]
+
+    return all_features
+
+
 def get_EEG_index(eeg_labels):
     indices = []
     for label, label_le in zip(EEG_channels, EEG_channels_LE):
@@ -116,38 +180,38 @@ def get_full_path(x):
     mode, tcp, pat_group, pat_s_t = x.split('/')
     pat, s, _ = pat_s_t.split('_')
 
-    s_fullname = [filename for filename in os.listdir("/scrap/users/amirshah/epilepsyTrans/TUSZ/edf/{}/{}/{}/{}/".format(mode, tcp, pat_group, pat)) if
+    # s_fullname = [filename for filename in os.listdir("/scrap/users/amirshah/epilepsyTrans/TUSZ/edf/{}/{}/{}/{}/".format(mode, tcp, pat_group, pat)) if
+    s_fullname = [filename for filename in os.listdir("/home/amirshah/EPFL/EpilepsyTransformer/input/TUSZ/edf/{}/{}/{}/{}/".format(mode, tcp, pat_group, pat)) if
      filename.startswith(s)]
     assert len(s_fullname) == 1, "Error {}".format(s_fullname)
     return "{}/{}/{}/{}/{}/{}".format(mode, tcp, pat_group, pat, s_fullname[0], pat_s_t)
 
 
 def get_filename_list(pat_num):
-    df = pd.read_csv('../TUSZ/TUSZ_labels.csv')
+    df = pd.read_csv('../input/TUSZ/TUSZ_labels.csv')
     df['onsets'] = df['onsets'].apply(lambda x: json.loads(x.replace('\n', ',')))
     df['offsets'] = df['offsets'].apply(lambda x: json.loads(x.replace('\n', ',')))
     df = df.set_index('file_name_edf')
     pd.set_option('max_columns', None)
 
     df['full_path'] = df['file_name'].apply(get_full_path)
-    df = df[df['file_name'].apply(lambda x: x.startswith("{}/{}".format(TUSZ_folder, pat_num)))]
+    # df = df[df['file_name'].apply(lambda x: x.startswith("{}/{}".format(TUSZ_folder, pat_num)))]
     return df['full_path'].tolist()
 
 
 def main():
-    pat_num = sys.argv[1]
+    # pat_num = sys.argv[1]
+    pat_num = -1
     filenames_list = get_filename_list(pat_num)
     # for filename in tqdm(filenames_list, desc="Files", position=0, leave=True):
-    # dir_output = '../input/TUSZ_12feat/{}/{}/'.format(TUSZ_folder, pat_num)
-    # file_prepared = [f.split('_band_zc.pickle')[0] for f in listdir(dir_output) if isfile(join(dir_output, f))]
-    for filename in filenames_list:
-        # if filename in pat_file_list:
-        #     continue
+    # dir_output = '../input/TUSZ_STFT/{}/{}/'.format(TUSZ_folder, pat_num)
+    # random.shuffle(filenames_list)
+    for filename in tqdm(filenames_list, desc="STFT extracting"):
+        # file_prepared = [f.split('_band_zc.pickle')[0] for f in listdir(dir_output) if isfile(join(dir_output, f))]
         # if filename.split('/')[-1] in file_prepared:
         #     print("{} is already prepared.".format(filename))
         #     continue
-        print(filename)
-        f = pyedflib.EdfReader(join("../TUSZ/edf/", filename))
+        f = pyedflib.EdfReader(join("../input/TUSZ/edf/", filename))
         signal_labels = f.getSignalLabels()
         indices = get_EEG_index(signal_labels)
         signal_shape = f.readSignal(0).shape
@@ -164,58 +228,14 @@ def main():
 
         sos = signal.butter(4, [0.2, 50], 'bandpass', fs=fs, output='sos')
         allsigFilt = signal.sosfiltfilt(sos, signals, axis=1)
+        # all_features = get_Eglass_features(allsigFilt, fs)
+        all_features = get_stft_features(allsigFilt, fs)
 
-        # %%
-        numCh = len(EEG_channels)
-        num_feat = 12
-        win_len = 4
-        eps = 1e-6
-        EPS_thresh_arr = [0.01, 0.04, 0.1, 0.4, 0.8]
-        length = int(allsigFilt.shape[1] // fs) - win_len + 1
+        # with open('../input/TUSZ_STFT/{}/{}/{}_STFT.pickle'.format(TUSZ_folder, pat_num, filename.split('/')[-1]), 'wb') as zc_file:
+        #     pickle.dump(all_features, zc_file)
 
-        valid_num_samples = (allsigFilt.shape[1] // fs) * fs
-
-        scaleFactor = np.max(allsigFilt, axis=1, keepdims=True) - np.min(allsigFilt, axis=1, keepdims=True)
-        allSigScaled = (allsigFilt - np.min(allsigFilt, axis=1, keepdims=True)) / (scaleFactor + eps)
-        allSigScaled = allSigScaled * 2 - 1
-
-        all_features = np.zeros((length, num_feat * numCh))  # Zero-crossing, band powers, LL, and scale_factor
-
-        for ch in range(numCh):
-            sigFiltScaled = allSigScaled[ch, :valid_num_samples]
-            new_fs = 256
-            new_num_samples = (allsigFilt.shape[1] // fs) * new_fs
-            sigFiltScaledResampled = resample(sigFiltScaled, new_num_samples)
-
-            featOther = calculateOtherMLfeatures_oneCh(np.copy(sigFiltScaledResampled), new_fs)
-            all_features[:, ch*num_feat] = scaleFactor[ch] / 5000
-            all_features[:, ch*num_feat+1:ch*num_feat+6] = featOther
-
-            x = np.convolve(zero_crossings(sigFiltScaledResampled), np.ones(new_fs), mode='same')
-            zeroCrossStandard = calculateMovingAvrgMeanWithUndersampling_v2(x, new_fs * 4, new_fs)
-            all_features[:, ch*num_feat+6] = zeroCrossStandard
-            for EPSthrIndx, EPSthr in enumerate(EPS_thresh_arr):
-                sigApprox = polygonal_approx(sigFiltScaledResampled, epsilon=EPSthr)
-                sigApproxInterp = np.interp(np.arange(len(sigFiltScaledResampled)), sigApprox, sigFiltScaledResampled[sigApprox])
-                x = np.convolve(zero_crossings(sigApproxInterp), np.ones(new_fs), mode='same')
-                zeroCrossApprox = calculateMovingAvrgMeanWithUndersampling_v2(x, new_fs *4 , new_fs)
-                all_features[:, ch*num_feat + 7 + EPSthrIndx] = zeroCrossApprox
-
-        # mean_train = np.mean(all_features, axis=0)[None, ...]
-        # print("Mean shape: {} -> {}".format(all_features.shape, mean_train.shape))
-        # std_train = np.std(all_features, axis=0)[None, ...]
-        # all_features = (all_features - mean_train) / std_train
-
-
-        # plt.figure()
-        # sns.heatmap(all_features.T, robust=True, fmt="f", cmap= 'RdBu_r')
-        # plt.show()
-
-        with open('../input/TUSZ_12feat/{}/{}/{}_band_zc.pickle'.format(TUSZ_folder, pat_num, filename.split('/')[-1]), 'wb') as zc_file:
+        with open('../input/TUSZ_STFT/{}_STFT.pickle'.format(filename.split('/')[-1]), 'wb') as zc_file:
             pickle.dump(all_features, zc_file)
-    # print(filename_fs_dict)
-    # with open('../TUSZ_zc/fs.pickle', 'wb') as zc_file:
-    #     pickle.dump(filename_fs_dict, zc_file)
 
 
 def visualize():
