@@ -117,6 +117,18 @@ dataset_parameter = {"TUSZ": {
             "test_len": 0
         }
 
+    },
+    "TUSZ_STFT": {
+        "pretrain": {
+            "train_len": 2688375,
+            "val_len": 8311,
+            "test_len": 538549
+        },
+        "scratch": {
+            "train_len": 100000, #196703,
+            "val_len": 28000,
+            "test_len": 44910
+        }
     }
 }
 

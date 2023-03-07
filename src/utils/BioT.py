@@ -7,10 +7,11 @@ from torch.utils.data import Dataset, DataLoader
 from torch.utils.data.sampler import Sampler
 import torch.nn.functional as F
 from bisect import bisect
+from utils.data import get_data
 
 torch.manual_seed(1)
 
-SEQ_LEN = 300
+SEQ_LEN = 64
 SEGMENT = 243
 ROI = SEQ_LEN - SEGMENT
 
@@ -62,6 +63,56 @@ class BioTransformer(nn.Module):
         return output
 
 
+class TSD(nn.Module):
+
+    def __init__(self, d_feature, d_model, n_heads, d_hid, seq_len, device):
+        super(TSD, self).__init__()
+        self.d_feature = d_feature
+        self.d_model = d_model
+        self.device = device
+
+        self.encoder = nn.Linear(d_feature, d_model)
+        encoder_layers = TransformerEncoderLayer(d_model=d_model, nhead=n_heads, dim_feedforward=d_hid, norm_first=True,
+                                                 batch_first=True, dropout=0.2, activation=F.gelu)
+        self.transformer_encoder = TransformerEncoder(encoder_layers, num_layers=n_heads)
+        self.decoder = nn.Linear(d_model, 1)
+
+        self.cls_token = nn.Parameter(torch.rand(1, 1, d_model))
+        self.pos_embed = nn.Parameter(torch.rand(1, seq_len, d_model))
+
+        self.dropout = nn.Dropout(0.1)
+        self.activation = nn.Sigmoid()
+
+        self.init_weights()
+
+    def init_weights(self) -> None:
+        initrange1 = 0.14
+        self.decoder.bias.data.zero_()
+        self.decoder.weight.data.uniform_(-initrange1, initrange1)
+
+    def patchify(self, stft_images, device, patch_size_h=50, patch_size_w = 7):
+        n, h, w = stft_images.shape
+        n_patch_h = h // patch_size_h
+        n_patch_w = w // patch_size_w
+        patches = torch.zeros(n, n_patch_w * n_patch_h, patch_size_h*patch_size_w).to(device)
+        for idx in range(n):
+            for i in range(n_patch_h):
+                for j in range(n_patch_w):
+                    patch = stft_images[idx, i * patch_size_h: (i+1) * patch_size_h, j* patch_size_w: (j+1) * patch_size_w]
+                    patches[idx, i * n_patch_w + j] = patch.flatten()
+        return patches
+
+    def forward(self, stft_images):
+        n, h, w = stft_images.shape
+        stft_patches = self.patchify(stft_images, self.device)
+        src = self.encoder(stft_patches) #* math.sqrt(self.d_model)
+        tokens = torch.cat((self.cls_token.repeat(n, 1, 1), src), dim=1)
+        tokens = tokens + self.pos_embed.repeat(n, 1, 1)
+        output = self.transformer_encoder(tokens)
+        output = self.decoder(output)
+        return output
+
+
 class PositionalEncoding(nn.Module):
 
     def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000, segment_length: Tensor = 0):
@@ -104,7 +155,7 @@ class Epilepsy60Dataset(Dataset):
         if self.sample_time[idx] < SEQ_LEN:
             valid_len = self.sample_time[idx]
             zero_pad = torch.zeros((SEQ_LEN-valid_len-1, self.x_total.shape[1]), dtype=torch.float)
-            x60 = torch.cat((zero_pad, self.x_total[idx-valid_len:idx+1, :]), dim=0) # TODO use torch pad
+            x60 = torch.cat((zero_pad, self.x_total[idx-valid_len:idx+1, :]), dim=0)  # TODO use torch pad
         else:
             valid_len = SEQ_LEN - 1
             x60 = self.x_total[idx - SEQ_LEN + 1:idx + 1, :]
@@ -112,6 +163,25 @@ class Epilepsy60Dataset(Dataset):
         y60 = torch.max(self.y_total[idx-valid_roi : idx +1])
 
         sample = {'x': x60, 'y': y60, 'idx': idx}
+        return sample
+
+
+class EpilepsyTSD(Dataset):
+    def __init__(self, mode):
+        X, labels, _, _, _, _ = get_data(pretrain_mode=False, dataset='TUSZ_STFT', vision_based=True, mode_specific=mode)
+
+        self.x_total = torch.from_numpy(X[mode])
+        self.y_total = torch.from_numpy(labels[mode])
+        self.mode = mode
+
+    def __len__(self):
+        return self.x_total.shape[0]
+
+    def __getitem__(self, idx):
+        x60 = self.x_total[idx]
+        y60 = self.y_total[idx]
+
+        sample = {'x': x60, 'y': y60}
         return sample
 
 

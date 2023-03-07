@@ -1,12 +1,11 @@
 import math
 
 import numpy as np
-import pandas as pd
-import json
 import pickle
 import seaborn as sns
 from utils.BioT import BioTransformer, Epilepsy60Dataset, ImbalancedDataSampler, EvaluateSampler, \
-    PatientDiscriminatorDataset, PatientDiscriminatorEvaluationDataset
+    PatientDiscriminatorDataset, PatientDiscriminatorEvaluationDataset, TSD, EpilepsyTSD
+from utils.data import get_data
 import torch
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader, TensorDataset
@@ -18,213 +17,61 @@ import torch.nn.functional as F
 from sklearn.preprocessing import QuantileTransformer
 from sklearn.metrics import confusion_matrix, f1_score, roc_auc_score, accuracy_score, precision_score, recall_score
 from utils.BioT import SEQ_LEN, SEGMENT, ROI
-from utils.params import dataset_parameter
 from utils.params import feature_noise_threshold
 from utils.metrics import thresh_max_f1
 
 
-def get_data(pretrain_mode=False, dataset='TUSZ'):
-    def set_labels(x):
-
-        for seizure_num in range(len(x['onsets'])):
-            if x['onsets'][seizure_num][0] == x['offsets'][seizure_num][0]:
-                continue
-            start = max(x['onsets'][seizure_num][0] // x['fs_FP1'] - 3, 0)
-            end = x['offsets'][seizure_num][0] // x['fs_FP1'] + 4
-            x['labels'][start:end] = 1
-
-    if dataset == "epilepsiae":
-        rootdir = '../input/Epilepsiae_total' if pretrain_mode else '../input/Epilepsiae_info'
-    elif dataset == "TUSZ":
-        rootdir = "../input/TUSZ_zc"
-    else:
-        raise Exception("Dataset unknown!")
-    df = pd.read_csv(rootdir + '/{}_labels.csv'.format(dataset))
-    if not pretrain_mode:
-        df['labels_len'] = (df['length'] // df['fs_FP1']) - 4
-        df['labels'] = df['labels_len'].apply(lambda x: np.zeros(x, dtype=np.int))
-        df['onsets'] = df['onsets'].apply(lambda x: json.loads(x.replace('\n', ',')))
-        df['offsets'] = df['offsets'].apply(lambda x: json.loads(x.replace('\n', ',')))
-        df.apply(set_labels, axis=1)
-
-    df = df.sort_values(by='patient')
-    # df = df.groupby('patient').head(1)
-
-    if dataset == "epilepsiae":
-        test_set = [x for x in df['file_name'].tolist() if x.startswith('Patient_1_')]
-        excluded = []
-        if pretrain_mode:
-            validation_set = [x for x in (df.groupby('patient').head(1))['file_name'].tolist() if
-                              (x.startswith('Patient_2_') or x.startswith('Patient_3_'))]
-        else:
-            validation_set = [x for x in df['file_name'].tolist() if x.startswith('Patient_2_')]
-    else:  # dataset = TUSZ
-        if pretrain_mode:
-            validation_set = [x for x in df['file_name'].tolist() if
-                              ('06175' in x or '01543' in x)]
-        else:
-            validation_set = [x for x in df[df['mode'] == 'devSet']['file_name'].tolist()]
-        test_set = [x for x in df[df['mode'] == 'testSet']['file_name'].tolist()]
-        excluded = [x for x in df['file_name'].tolist() if x.startswith('dev') and (not x in test_set)]
-
-    print('test Set', len(test_set))
-    training_set = [x for x in df['file_name'].tolist() if
-                    (not x in test_set) and (not x in validation_set) and (not x in excluded)]
-    df_file_name = df.set_index('file_name')
-
-    pretrain_scratch_mode = "pretrain" if pretrain_mode else "scratch"
-    band_feature_size = dataset_parameter[dataset][pretrain_scratch_mode]["band_feature_size"]
-    zc_feature_size = dataset_parameter[dataset][pretrain_scratch_mode]["zc_feature_size"]
-    train_len = dataset_parameter[dataset][pretrain_scratch_mode]["train_len"]
-    val_len = dataset_parameter[dataset][pretrain_scratch_mode]["val_len"]
-    test_len = dataset_parameter[dataset][pretrain_scratch_mode]["test_len"]
-    X = {'train': np.zeros((train_len, band_feature_size + zc_feature_size)),
-         'test': np.zeros((test_len, band_feature_size + zc_feature_size)),
-         'val': np.zeros((val_len, band_feature_size + zc_feature_size))}
-    labels = {'train': np.zeros((0, 1)), 'test': np.zeros((0, 1)), 'val': np.zeros((0, 1))}
-    valid_labels = {'train': np.zeros(0, dtype=np.int), 'test': np.zeros(0, dtype=np.int),
-                    'val': np.zeros(0, dtype=np.int)}
-    minute_labels = {'train': np.zeros(0, dtype=np.int), 'test': np.zeros(0, dtype=np.int),
-                     'val': np.zeros(0, dtype=np.int)}
-    sample_time = {'train': np.zeros(0, dtype=np.int), 'test': np.zeros(0, dtype=np.int),
-                   'val': np.zeros(0, dtype=np.int)}
-    total_dataset = {'train': training_set, 'test': test_set, 'val': validation_set}
-    pat_start_end = {'train': {new_list: [] for new_list in range(30)},
-                     'test': {new_list: [] for new_list in range(30)},
-                     'val': {new_list: [] for new_list in range(30)}}
-    feature_name= ['meanAmpl', 'LL', 'p_delta', 'p_theta', 'p_alfa', 'p_beta', 'ZC standard', '16', '32', '64', '128', '256']
-    for mode in ['train', 'val', 'test']:
-        total_len = 0
-        start_index = 0
-        for t_file in total_dataset[mode]:
-            with open(rootdir + '/{}_band_mean_ll.pickle'.format(t_file), 'rb') as pickle_file:
-                band_data = pickle.load(pickle_file)
-                for i in range(band_data.shape[1]):
-                    band_data[:, i] = np.where(band_data[:, i] > feature_noise_threshold[i%6], np.nan, band_data[:, i])
-                band_data = np.pad(band_data, ((0, 1), (0, 0)))
-                X[mode][start_index:start_index + band_data.shape[0], :band_feature_size] = band_data
-
-            with open(rootdir + '/{}_zc.pickle'.format(t_file), 'rb') as pickle_file:
-                # print(t_file)
-                data = pickle.load(pickle_file)
-                for i in range(data.shape[1]):
-                    data[:, i] = np.where(data[:, i] > feature_noise_threshold[i%6 + 6], np.nan, data[:, i])
-                data = np.pad(data, ((0, 1), (0, 0)))
-                assert data.shape[0] == band_data.shape[0], \
-                    "Band power feature length {} is not equal to zero crossing {}".format(data.shape[0],
-                                                                                           band_data.shape[0])
-                # if pretrain_mode and data.shape[0] < SEQ_LEN:  # very short files
-                #     continue
-                total_len += data.shape[0]
-                X[mode][start_index:start_index + data.shape[0], band_feature_size:] = data
-                start_index += data.shape[0]
-                y = np.zeros(data.shape[0]) if pretrain_mode else np.pad(df_file_name.loc[t_file, 'labels'], (0, 1))
-                if data.shape[0] != y.shape[0]:
-                    print("Error in shape of {}: {} and {}\n".format(t_file, data.shape, y.shape))
-            pat_num = t_file.split('/')[-1].split('_')[0] if dataset == "TUSZ" else int(t_file.split('_')[1]) - 1
-
-            valid_start = labels[mode].shape[0] + 56
-            # if mode == 'test': valid_start = valid_start - 4
-            valid_end = labels[mode].shape[0] + y.shape[0]
-            minute_labels[mode] = np.concatenate(
-                (minute_labels[mode], np.arange(start=valid_start, stop=valid_end, step=60)))
-            valid_labels[mode] = np.concatenate((valid_labels[mode], np.arange(start=valid_start, stop=valid_end)))
-
-            if pat_num not in pat_start_end[mode]:
-                pat_start_end[mode][pat_num] = []
-            pat_start_end[mode][pat_num].append((labels[mode].shape[0], labels[mode].shape[0] + y.shape[0]))
-
-            sample_time[mode] = np.concatenate((sample_time[mode], np.arange(start=0, stop=y.shape[0])))
-            labels[mode] = np.concatenate((labels[mode], np.expand_dims(y, axis=1)))
-
-        print("total_len ", mode, total_len)
-    print(X["train"].shape)
-    print(X["val"].shape)
-    print(X["test"].shape)
-
-    X_reshaped = X["train"].reshape((-1,2,21,6))
-    X_transposed = np.transpose(X_reshaped, (0,2, 1, 3))
-    X_reshaped = X_transposed.reshape((-1, 12))
-    # for i in range(12):
-    #     plt.figure()
-    #     plt.xscale('log')
-    #     plt.hist(x =X_reshaped[:, i], bins=np.logspace(start=np.log10(1e-4), stop=np.log10(1e8), num=100), log=True)
-    #     plt.title(feature_name[i])
-    #     plt.show()
-    mean_train = np.nanmean(X["train"], axis=0)[None, ...]
-    print("Mean shape: {} -> {}".format(X["train"].shape, mean_train.shape))
-    std_train = np.nanstd(X["train"], axis=0)[None, ...]
-    X["train"] = (X["train"] - mean_train) / std_train
-    X["val"] = (X["val"] - mean_train) / std_train
-    X["test"] = (X["test"] - mean_train) / std_train
-
-    print("maximum", np.nanmax(X["train"]))
-    X["train"] = np.nan_to_num(X["train"], nan=1.1*np.nanmax(X["train"]))
-    X["val"] = np.nan_to_num(X["val"], nan=1.1*np.nanmax(X["train"]))
-    X["test"] = np.nan_to_num(X["test"], nan=1.1*np.nanmax(X["train"]))
-    print("new maximum", np.max(X["train"]))
-
-    print(valid_labels["test"].shape)
-    return X, labels, minute_labels, pat_start_end, sample_time, valid_labels
-
-
 def train(model, device, save_path: str, learning_rate: float = 1e-5, params_lr=None):
-    X, labels, valid_labels, _, sample_time, _ = get_data(pretrain_mode=False, dataset='TUSZ')
 
     # %%
-    mode = "train"
-    seizure_indices = np.where(labels[mode] == 1)[0]
-    non_seizure_indices = np.where(labels[mode] == 0)[0]
-    post_ictal_indices = []
-    ictal_post_ictal_indices = []
-    seizure_end_points = np.where(np.diff(labels[mode][:, 0]).astype(np.int) == -1)[0]
-    for post_ictal in seizure_end_points:
-        for post_time in range(1, SEQ_LEN):
-            if post_ictal + post_time >= len(sample_time[mode]) or \
-                    sample_time[mode][post_ictal + post_time] == 0 or \
-                    labels[mode][post_ictal + post_time] == 1:
-                break
-            if post_time <= ROI:
-                ictal_post_ictal_indices.append(post_ictal + post_time)
-            else:
-                post_ictal_indices.append(post_ictal + post_time)
+    # mode = "train"
+    # seizure_indices = np.where(labels[mode] == 1)[0]
+    # non_seizure_indices = np.where(labels[mode] == 0)[0]
+    # post_ictal_indices = []
+    # ictal_post_ictal_indices = []
+    # seizure_end_points = np.where(np.diff(labels[mode][:, 0]).astype(np.int) == -1)[0]
+    # for post_ictal in seizure_end_points:
+    #     for post_time in range(1, SEQ_LEN):
+    #         if post_ictal + post_time >= len(sample_time[mode]) or \
+    #                 sample_time[mode][post_ictal + post_time] == 0 or \
+    #                 labels[mode][post_ictal + post_time] == 1:
+    #             break
+    #         if post_time <= ROI:
+    #             ictal_post_ictal_indices.append(post_ictal + post_time)
+    #         else:
+    #             post_ictal_indices.append(post_ictal + post_time)
 
-    post_ictal_indices = np.array(post_ictal_indices)
-    ictal_post_ictal_indices = np.array(ictal_post_ictal_indices)
-    non_seizure_indices = np.setdiff1d(non_seizure_indices, post_ictal_indices, assume_unique=True)
-    non_seizure_indices = np.setdiff1d(non_seizure_indices, ictal_post_ictal_indices, assume_unique=True)
-    print("{}: {} seizures, {} seizure points, {} non_seizure points and {} post ictal points "
-          .format(mode, len(seizure_end_points),
-                  len(seizure_indices),
-                  len(non_seizure_indices),
-                  len(post_ictal_indices)))
+    # post_ictal_indices = np.array(post_ictal_indices)
+    # ictal_post_ictal_indices = np.array(ictal_post_ictal_indices)
+    # non_seizure_indices = np.setdiff1d(non_seizure_indices, post_ictal_indices, assume_unique=True)
+    # non_seizure_indices = np.setdiff1d(non_seizure_indices, ictal_post_ictal_indices, assume_unique=True)
+    # print("{}: {} seizures, {} seizure points, {} non_seizure points and {} post ictal points "
+    #       .format(mode, len(seizure_end_points),
+    #               len(seizure_indices),
+    #               len(non_seizure_indices),
+    #               len(post_ictal_indices)))
 
-    X_train = X["train"]
-    X_val = X["val"]
-    Y = labels["train"]
-    Y_val = labels["val"]
-    sample_time_train = sample_time["train"]
-    sample_time_val = sample_time["val"]
+    # X_train = X["train"]
+    # X_val = X["val"]
+    # Y = labels["train"]
+    # Y_val = labels["val"]
+    # sample_time_train = sample_time["train"]
+    # sample_time_val = sample_time["val"]
 
-    train_set = Epilepsy60Dataset(torch.from_numpy(X_train).float(), torch.from_numpy(Y).float(),
-                                  torch.from_numpy(sample_time_train).long())
-    sampler = ImbalancedDataSampler(torch.from_numpy(seizure_indices).long(),
-                                    torch.from_numpy(non_seizure_indices).long(),
-                                    torch.from_numpy(post_ictal_indices).long(),
-                                    post_non_ratio=0.2,
-                                    overlap=20)
-    train_loader = DataLoader(train_set, batch_size=32, sampler=sampler, num_workers=4)
+    # sampler = ImbalancedDataSampler(torch.from_numpy(seizure_indices).long(),
+    #                                 torch.from_numpy(non_seizure_indices).long(),
+    #                                 torch.from_numpy(post_ictal_indices).long(),
+    #                                 post_non_ratio=0.0,
+    #                                 overlap=1)
 
-    val_set = Epilepsy60Dataset(torch.from_numpy(X_val).float(), torch.from_numpy(Y_val).float(),
-                                torch.from_numpy(sample_time_val).long())
-    val_sampler = EvaluateSampler(torch.from_numpy(valid_labels['val']).int(), overlap=1)
-    val_loader = DataLoader(val_set, shuffle=False, batch_size=16, sampler=val_sampler)
+    val_set = EpilepsyTSD(mode="val")
+    val_loader = DataLoader(val_set, shuffle=False, batch_size=32)
 
     # Training loop
     if params_lr == None:
-        optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
+        optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     else:
-        optimizer = torch.optim.AdamW(params_lr, lr=learning_rate, weight_decay=1e-4)
+        optimizer = torch.optim.Adam(params_lr, lr=learning_rate)
     lr_sched = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.97)
 
     target_lr = learning_rate
@@ -245,6 +92,8 @@ def train(model, device, save_path: str, learning_rate: float = 1e-5, params_lr=
     prev_val_loss = 1000
     patience_count = 0
     for epoch in tqdm(range(N_EPOCHS), desc="Training"):
+        train_set = EpilepsyTSD(mode="train")
+        train_loader = DataLoader(train_set, batch_size=128, num_workers=4)
         model.train(True)  # turn on train mode
         train_loss = 0.0
         for i, batch in enumerate(tqdm(train_loader, desc=f"Epoch {epoch + 1}", position=0, leave=True)):
@@ -252,9 +101,8 @@ def train(model, device, save_path: str, learning_rate: float = 1e-5, params_lr=
             schedule_lr(epoch * len(train_loader) + i)
             x, y = batch['x'], batch['y']
             x, y = x.to(device), y.to(device)
-            x = torch.transpose(x, 0, 1)
             y_hat = model(x)
-            loss = criterion(y_hat[-1, :, 0], y.view(-1, ))
+            loss = criterion(y_hat[:, 0, 0], y.view(-1, ))
 
             train_loss += loss.detach().cpu().item()
 
@@ -269,13 +117,12 @@ def train(model, device, save_path: str, learning_rate: float = 1e-5, params_lr=
             for i, batch in enumerate(val_loader):
                 x, y = batch['x'], batch['y']
                 x, y = x.to(device), y.to(device)
-                x = torch.transpose(x, 0, 1)
                 voutputs = model(x)
                 test_labels += y.view(-1, ).tolist()
-                vloss = criterion(voutputs[-1, :, 0], y.view(-1, ))
+                vloss = criterion(voutputs[:, 0, 0], y.view(-1, ))
                 running_vloss += vloss.detach().cpu().item()
 
-                test_predict += torch.sigmoid(voutputs[-1, :, 0]).tolist()
+                test_predict += torch.sigmoid(voutputs[:, 0, 0]).tolist()
 
             avg_vloss = running_vloss / len(val_loader)
 
@@ -308,7 +155,7 @@ def train(model, device, save_path: str, learning_rate: float = 1e-5, params_lr=
         else:
             patience_count += 1
         prev_val_loss = avg_vloss
-        if epoch > best_f1["epoch"] + 10 and patience_count > 3:
+        if epoch > best_f1["epoch"] + 50 and patience_count > 3:
             break
 
     torch.save(model.state_dict(), save_path)
@@ -453,14 +300,28 @@ def train_scratch(dataset):
     d_hid = 4 * d_model
     seq_len = SEQ_LEN + 3
     segment = SEGMENT
-    n_layers = 8
+    n_layers = 12
     n_out = 1
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print('device : ', device)
     model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len,
                            n_layers=n_layers, n_out=n_out, device=device, segments=segment).to(device)
-    savepath = '../output/model{}_{}_{}_scratch'.format(SEQ_LEN, n_layers, dataset)
-    train(model, device, savepath, learning_rate=1e-5)
+    savepath = '../output/model{}_{}_{}_preprocess_scratch'.format(SEQ_LEN, n_layers, dataset)
+    train(model, device, savepath, learning_rate=1e-4)
+
+
+def train_stft(dataset):
+    d_feature = 350
+    d_model = 16
+    n_heads = 4
+    seq_len = 85
+    d_hid = 4 * d_model
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print('device : ', device)
+    model = TSD(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, device=device,
+                seq_len=seq_len).to(device)
+    savepath = '../output/model{}_STFT'.format(seq_len)
+    train(model, device, savepath, learning_rate=3e-5)
 
 
 def finetune():
@@ -524,36 +385,25 @@ def print_results(conf):
 
 
 def evaluate(dataset="TUSZ"):
-    d_feature = 126 * 2 if dataset == "TUSZ" else 144
-    d_model = 256
+    d_feature = 350
+    d_model = 16
     n_heads = 4
+    seq_len = 85
     d_hid = 4 * d_model
-    seq_len = SEQ_LEN + 3
-    segment = SEGMENT
-    n_layers = 4
-    n_out = 1
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print('device : ', device)
-    model = BioTransformer(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, seq_len=seq_len,
-                           n_layers=n_layers,
-                           n_out=n_out, device=device, segments=segment).to(device)
-    load_path = '../output/finetuned_model{}_n{}_best'.format(300, n_layers)
+    model = TSD(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, device=device,
+                seq_len=seq_len).to(device)
+    load_path = '../output/model64_STFT_best'
     # load_path = '../output/model{}_{}_{}_scratch_best'.format(300, n_layers, dataset)
     model.load_state_dict(torch.load(load_path), strict=True)
 
     print(model)
 
-    X, labels, valid_labels, _, sample_time, _ = get_data(pretrain_mode=False, dataset="TUSZ")
-    best_th_init = 0.5
+    best_th_init = 0.7
     for mode in ["val", "test"]:
-        X_test = X[mode]
-        Y = labels[mode]
-        sample_time_test = sample_time[mode]
-
-        test_set = Epilepsy60Dataset(torch.from_numpy(X_test).float(), torch.from_numpy(Y).long(),
-                                     torch.from_numpy(sample_time_test).long())
-        test_sampler = EvaluateSampler(torch.from_numpy(valid_labels[mode]).int(), overlap=1)
-        test_loader = DataLoader(test_set, batch_size=1, shuffle=False, sampler=test_sampler)
+        test_set = EpilepsyTSD(mode=mode)
+        test_loader = DataLoader(test_set, batch_size=32, shuffle=False)
 
         model.eval()
         test_predict = []
@@ -564,20 +414,39 @@ def evaluate(dataset="TUSZ"):
             for batch in test_loader:
                 x, y = batch['x'], batch['y']
                 x, y = x.to(device), y.to(device)
-                x = torch.transpose(x, 0, 1)
-                outputs = model(x)[-1, :, 0]
+                outputs = model(x)[:, 0, 0]
                 predicted = torch.sigmoid(outputs)
                 test_predict += predicted.tolist()
                 test_labels += y.view(-1, ).tolist()
-
-                if mode == "val":
-                    continue
-
-                if (predicted.detach().cpu().item() > best_th_init) != (y.detach().cpu().item() == 1):
-                    plt.figure(figsize=(6,12))
-                    plt.title("Predict: {:.2f}, true: {}".format(predicted.detach().cpu().item(), y.detach().cpu().item()))
-                    sns.heatmap(x.squeeze().cpu().numpy().transpose(), cmap="magma_r", vmax=31)
-                    plt.show()
+                # if mode == "test":
+                #     if predicted[0] > best_th_init and y[0] == 1.0:
+                #         sns.heatmap(model(x)[1].squeeze().cpu().numpy(), cmap="magma_r")
+                #         plt.title("True Positive")
+                #         plt.xlabel("Time")
+                #         # plt.xticks(np.arange(0, 21, 21/12))
+                #         plt.ylabel("FT x CH")
+                #         plt.show()
+                #     elif predicted[0] < best_th_init and y[0] == 1.0:
+                #         sns.heatmap(x.squeeze().cpu().numpy(), cmap="magma_r", vmax=40)
+                #         plt.title("False Negative")
+                #         plt.xlabel("Time")
+                #         plt.xticks(np.arange(0, 21, 21 / 12))
+                #         plt.ylabel("FT x CH")
+                #         plt.show()
+                #     elif predicted[0] < best_th_init and y[0] == 0.0:
+                #         sns.heatmap(model(x)[1].squeeze().cpu().numpy(), cmap="magma_r")
+                #         plt.title("True Negative")
+                #         plt.xlabel("Time")
+                #         # plt.xticks(np.arange(0, 21, 21 / 12))
+                #         plt.ylabel("FT x CH")
+                #         plt.show()
+                #     elif predicted[0] > best_th_init and y[0] == 0.0:
+                #         sns.heatmap(x.squeeze().cpu().numpy(), cmap="magma_r", vmax=40)
+                #         plt.title("False Positive")
+                #         plt.xlabel("Time")
+                #         plt.xticks(np.arange(0, 21, 21 / 12))
+                #         plt.ylabel("FT x CH")
+                #         plt.show()
 
         if mode == "val":
             best_thresh = thresh_max_f1(y_true=test_labels, y_prob=test_predict)
@@ -762,8 +631,9 @@ def visualize_model():
 
 
 if __name__ == '__main__':
+    # get_data(pretrain_mode=False, dataset="TUSZ_STFT", vision_based=True)
     # pretrain("TUSZ")
     evaluate()
-    # train_scratch(dataset="TUSZ")
+    # train_stft(dataset="TUSZ_STFT")
     # evaluate_pretraining(visualization=False)
     # finetune()
