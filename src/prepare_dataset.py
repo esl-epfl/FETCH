@@ -147,19 +147,24 @@ def get_stft_features(all_signal_filtered, fs):
     length = int(all_signal_filtered.shape[1] // fs)
     num_ch = len(EEG_channels)
     frequency_stop = 50
-    stft_time_len = 22
+    stft_time_len = 14
+    frequency_resolution = 2
 
     valid_num_samples = (all_signal_filtered.shape[1] // fs) * fs
-    new_fs = 256
+    new_fs = 250
     new_num_samples = (all_signal_filtered.shape[1] // fs) * new_fs
     number_of_12_seconds = int(new_num_samples // (12 * new_fs))
-    all_features = np.zeros((number_of_12_seconds, num_ch, frequency_stop, stft_time_len))
+    all_features = np.zeros((number_of_12_seconds, num_ch, frequency_stop * frequency_resolution, stft_time_len))
     for ch in range(num_ch):
         single_channel_signal = all_signal_filtered[ch, :valid_num_samples]
         single_channel_signal = resample(single_channel_signal, new_num_samples)
         for i in range(number_of_12_seconds):
-            f, t, Zxx = stft(single_channel_signal[i*12*new_fs: (i+1)*12*new_fs], fs=2.0, nperseg=250, noverlap=100)
-            all_features[i, ch, :, :] = np.abs(Zxx)[:frequency_stop, :]
+            f, t, Zxx = stft(single_channel_signal[i*12*new_fs: (i+1)*12*new_fs], fs=new_fs,
+                             nfft=new_fs * frequency_resolution,
+                             nperseg=new_fs, noverlap=50, padded=False, boundary=None)
+            Zxx = Zxx[:frequency_stop * frequency_resolution, :]
+            Zxx = np.reshape(Zxx, (-1, Zxx.shape[1]))
+            all_features[i, ch, :, :] = (np.log(np.abs(Zxx) + 1e-10)).astype(np.float32)
 
     return all_features
 
