@@ -19,6 +19,7 @@ from sklearn.metrics import confusion_matrix, f1_score, roc_auc_score, accuracy_
 from utils.BioT import SEQ_LEN, SEGMENT, ROI
 from utils.params import feature_noise_threshold
 from utils.metrics import thresh_max_f1
+from vit_pytorch.vit import ViT
 
 
 def train(model, device, save_path: str, learning_rate: float = 1e-5, params_lr=None):
@@ -72,7 +73,8 @@ def train(model, device, save_path: str, learning_rate: float = 1e-5, params_lr=
         optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     else:
         optimizer = torch.optim.Adam(params_lr, lr=learning_rate)
-    lr_sched = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.97)
+    # lr_sched = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.97)
+    lr_sched = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.99)
 
     target_lr = learning_rate
 
@@ -85,7 +87,7 @@ def train(model, device, save_path: str, learning_rate: float = 1e-5, params_lr=
             set_lr(iteration * target_lr / 5000)
 
     criterion = BCEWithLogitsLoss()
-    N_EPOCHS = 200
+    N_EPOCHS = 1000
     train_loss_list = []
     val_loss_list = []
     best_f1 = {"value": 0, "epoch": 0, "val_loss": 1000, "auc": 0}
@@ -93,22 +95,27 @@ def train(model, device, save_path: str, learning_rate: float = 1e-5, params_lr=
     patience_count = 0
     for epoch in tqdm(range(N_EPOCHS), desc="Training"):
         train_set = EpilepsyTSD(mode="train")
-        train_loader = DataLoader(train_set, batch_size=128, num_workers=4)
+        train_loader = DataLoader(train_set, batch_size=256, num_workers=4)
         model.train(True)  # turn on train mode
         train_loss = 0.0
         for i, batch in enumerate(tqdm(train_loader, desc=f"Epoch {epoch + 1}", position=0, leave=True)):
             optimizer.zero_grad()
-            schedule_lr(epoch * len(train_loader) + i)
+            # schedule_lr(epoch * len(train_loader) + i)
             x, y = batch['x'], batch['y']
+            x = x[:, np.newaxis, :, :]
             x, y = x.to(device), y.to(device)
             y_hat = model(x)
-            loss = criterion(y_hat[:, 0, 0], y.view(-1, ))
+            loss = criterion(y_hat.view(-1,), y.view(-1, ))
 
             train_loss += loss.detach().cpu().item()
 
             loss.backward()
             # torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
             optimizer.step()
+
+        if epoch % 10 != 9:
+            continue
+
         model.eval()
         with torch.no_grad():
             test_predict = []
@@ -116,13 +123,14 @@ def train(model, device, save_path: str, learning_rate: float = 1e-5, params_lr=
             running_vloss = 0.0
             for i, batch in enumerate(val_loader):
                 x, y = batch['x'], batch['y']
+                x = x[:, np.newaxis, :, :]
                 x, y = x.to(device), y.to(device)
                 voutputs = model(x)
                 test_labels += y.view(-1, ).tolist()
-                vloss = criterion(voutputs[:, 0, 0], y.view(-1, ))
+                vloss = criterion(voutputs.view(-1,), y.view(-1, ))
                 running_vloss += vloss.detach().cpu().item()
 
-                test_predict += torch.sigmoid(voutputs[:, 0, 0]).tolist()
+                test_predict += torch.sigmoid(voutputs.view(-1,)).tolist()
 
             avg_vloss = running_vloss / len(val_loader)
 
@@ -155,7 +163,7 @@ def train(model, device, save_path: str, learning_rate: float = 1e-5, params_lr=
         else:
             patience_count += 1
         prev_val_loss = avg_vloss
-        if epoch > best_f1["epoch"] + 50 and patience_count > 3:
+        if epoch > best_f1["epoch"] + 100 and patience_count > 3:
             break
 
     torch.save(model.state_dict(), save_path)
@@ -312,14 +320,17 @@ def train_scratch(dataset):
 
 def train_stft(dataset):
     d_feature = 350
-    d_model = 16
-    n_heads = 4
+    d_model = 128
+    n_heads = 2
     seq_len = 85
     d_hid = 4 * d_model
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print('device : ', device)
-    model = TSD(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, device=device,
-                seq_len=seq_len).to(device)
+    # model = TSD(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, device=device,
+    #             seq_len=seq_len).to(device)
+    model = ViT(image_size=(2100, 14), patch_size=(50, 7), num_classes=1,  dim=128, depth=2,
+                heads=2, mlp_dim=512, pool='cls', channels=1,
+                dim_head=64, dropout=0.2, emb_dropout=0.2).to(device).double()
     savepath = '../output/model{}_STFT'.format(seq_len)
     train(model, device, savepath, learning_rate=3e-5)
 
@@ -392,9 +403,12 @@ def evaluate(dataset="TUSZ"):
     d_hid = 4 * d_model
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print('device : ', device)
-    model = TSD(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, device=device,
-                seq_len=seq_len).to(device)
-    load_path = '../output/model64_STFT_best'
+    # model = TSD(d_feature=d_feature, d_model=d_model, n_heads=n_heads, d_hid=d_hid, device=device,
+    #             seq_len=seq_len).to(device)
+    model = ViT(image_size=(2100, 14), patch_size=(50, 7), num_classes=1, dim=128, depth=2,
+                heads=2, mlp_dim=512, pool='cls', channels=1,
+                dim_head=64, dropout=0.2, emb_dropout=0.2).to(device).double()
+    load_path = '../output/model85_STFT_best'
     # load_path = '../output/model{}_{}_{}_scratch_best'.format(300, n_layers, dataset)
     model.load_state_dict(torch.load(load_path), strict=True)
 
@@ -413,10 +427,11 @@ def evaluate(dataset="TUSZ"):
         with torch.no_grad():
             for batch in test_loader:
                 x, y = batch['x'], batch['y']
+                x = x[:, np.newaxis, :, :]
                 x, y = x.to(device), y.to(device)
-                outputs = model(x)[:, 0, 0]
+                outputs = model(x)
                 predicted = torch.sigmoid(outputs)
-                test_predict += predicted.tolist()
+                test_predict += predicted.view(-1,).tolist()
                 test_labels += y.view(-1, ).tolist()
                 # if mode == "test":
                 #     if predicted[0] > best_th_init and y[0] == 1.0:
@@ -633,7 +648,7 @@ def visualize_model():
 if __name__ == '__main__':
     # get_data(pretrain_mode=False, dataset="TUSZ_STFT", vision_based=True)
     # pretrain("TUSZ")
-    evaluate()
-    # train_stft(dataset="TUSZ_STFT")
+    # evaluate()
+    train_stft(dataset="TUSZ_STFT")
     # evaluate_pretraining(visualization=False)
     # finetune()

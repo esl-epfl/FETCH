@@ -67,7 +67,6 @@ def get_data(pretrain_mode=False, dataset='TUSZ', vision_based=False, mode_speci
         test_set = [x for x in df[df['mode'] == 'testSet']['file_name'].tolist()]
         excluded = [x for x in df['file_name'].tolist() if x.startswith('dev') and (not x in test_set)]
 
-    print('test Set', len(test_set))
     training_set = [x for x in df['file_name'].tolist() if
                     (not x in test_set) and (not x in validation_set) and (not x in excluded)]
     df_file_name = df.set_index('file_name')
@@ -108,7 +107,7 @@ def get_data(pretrain_mode=False, dataset='TUSZ', vision_based=False, mode_speci
     for mode in mode_list:
         total_len = 0
         start_index = 0
-        for t_file in tqdm(total_dataset[mode], desc="Loading {} ".format(mode)):
+        for t_file in total_dataset[mode]:
             with open(rootdir + '/{}_STFT.pickle'.format(t_file.split('/')[-1]), 'rb') as pickle_file:
                 stft_data = pickle.load(pickle_file)
                 stft_data_reshaped = np.reshape(stft_data[:, :, :, :], newshape=(-1, 2100, 14))
