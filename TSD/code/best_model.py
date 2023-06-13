@@ -15,6 +15,9 @@ import tuh_dataset
 from vit_pytorch.vit import ViT
 
 print(f"Torch: {torch.__version__}")
+print("Channels selected for this trainin\nGroup number: {}\nChannels: {} ".format(tuh_dataset.args.selected_channels,
+                                                                                   tuh_dataset.channels_groups
+                                                                                   [tuh_dataset.args.selected_channels]))
 
 
 def seed_everything(seed=99):
@@ -35,8 +38,8 @@ model = ViT(image_size=(5000, 14), patch_size=(50, 7), num_classes=1, dim=16, de
 sigmoid = nn.Sigmoid()
 
 # Training settings
-batch_size = 256
-epochs = 999999
+batch_size = 1024
+epochs = 60
 lr = 3e-5
 gamma = 0.7
 tuh_dataset.args.eeg_type = 'stft'
@@ -51,7 +54,7 @@ scheduler = StepLR(optimizer, step_size=1, gamma=gamma)
 train_loader, val_loader, test_loader = tuh_dataset.get_data_loader(batch_size)
 
 best_val_auc = 0.0
-model_directory = os.path.join(tuh_dataset.args.save_directory, 'test_sep')
+model_directory = os.path.join(tuh_dataset.args.save_directory, 'test_8ch_channels{}'.format(tuh_dataset.args.selected_channels))
 os.mkdir(model_directory)
 for epoch in range(epochs):
 
@@ -128,4 +131,4 @@ for epoch in range(epochs):
         test_auc = roc_auc_score(test_label_all, test_prob_all)
         print(f"test_loss: {epoch_test_loss:.4f} - test_auc: {test_auc:.4f}")
 
-        torch.save(model, os.path.join(model_directory, 'test_model_{}'.format(test_auc)))
+        torch.save(model, os.path.join(model_directory, 'test_model_{}_{}'.format(epoch, test_auc)))

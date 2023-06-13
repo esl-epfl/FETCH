@@ -19,6 +19,8 @@ from tqdm import tqdm
 from einops import rearrange, repeat
 from einops.layers.torch import Rearrange
 
+from tuh_dataset import channels_groups, bipolar_signals_func
+
 
 def seed_everything(seed=99):
     random.seed(seed)
@@ -30,7 +32,7 @@ def seed_everything(seed=99):
     torch.backends.cudnn.deterministic = True
 
 
-seed_everything(seed=55)
+seed_everything(seed=99)
 
 
 class PreNorm(nn.Module):
@@ -144,30 +146,7 @@ class EEGVT(nn.Module):
         return self.mlp_head(x)
 
 
-def bipolar_signals_func(signals):
-    bipolar_signals = []
-    bipolar_signals.append(signals[0] - signals[4])  # fp1-f7
-    bipolar_signals.append(signals[1] - signals[5])  # fp2-f8
-    bipolar_signals.append(signals[4] - signals[9])  # f7-t3
-    bipolar_signals.append(signals[5] - signals[10])  # f8-t4
-    bipolar_signals.append(signals[9] - signals[15])  # t3-t5
-    bipolar_signals.append(signals[10] - signals[16])  # t4-t6
-    bipolar_signals.append(signals[15] - signals[13])  # t5-o1
-    bipolar_signals.append(signals[16] - signals[14])  # t6-o2
-    bipolar_signals.append(signals[9] - signals[6])  # t3-c3
-    bipolar_signals.append(signals[7] - signals[10])  # c4-t4
-    bipolar_signals.append(signals[6] - signals[8])  # c3-cz
-    bipolar_signals.append(signals[8] - signals[7])  # cz-c4
-    bipolar_signals.append(signals[0] - signals[2])  # fp1-f3
-    bipolar_signals.append(signals[1] - signals[3])  # fp2-f4
-    bipolar_signals.append(signals[2] - signals[6])  # f3-c3
-    bipolar_signals.append(signals[3] - signals[7])  # f4-c4
-    bipolar_signals.append(signals[6] - signals[11])  # c3-p3
-    bipolar_signals.append(signals[7] - signals[12])  # c4-p4
-    bipolar_signals.append(signals[11] - signals[13])  # p3-o1
-    bipolar_signals.append(signals[12] - signals[14])  # p4-o2
 
-    return bipolar_signals
 
 
 def spectrogram_unfold_feature(signals):
@@ -198,7 +177,7 @@ class TUHDataset(Dataset):
         with open(self.file_list[idx], 'rb') as f:
             data_pkl = pickle.load(f)
 
-            signals = np.asarray(bipolar_signals_func(data_pkl['signals']))
+            signals = np.asarray(bipolar_signals_func(data_pkl['signals'], 6))
             # print(signals.shape)
 
             if eeg_type == 'stft':
@@ -277,22 +256,20 @@ def test():
     test_prob_all = np.zeros(0, dtype=np.float)
 
     time_consumes = []
+    start_time = time.perf_counter()
     with torch.no_grad():
         for data, label, label_name in tqdm(test_loader):
             test_label_all.extend(label)
-
-            start_time = time.perf_counter()
             test_prob = model(data.to(device))
-            time_consumes.append(time.perf_counter() - start_time)
 
             test_prob = torch.squeeze(sigmoid(test_prob))
             test_prob_all = np.concatenate((test_prob_all, test_prob.cpu().numpy()))
 
     test_auc = roc_auc_score(test_label_all, test_prob_all)
+    time_consumes.append(time.perf_counter() - start_time)
     print(f"test_auc: {test_auc}")
-    print('average_time: {}'.format(sum(time_consumes) / len(time_consumes)))
+    print('total_time: {}'.format(sum(time_consumes) / len(time_consumes)))
 
-    #############找阈值
     def Find_Optimal_Cutoff(FPR, TPR, thresholds):
         y = TPR - FPR
         Youden_index = np.argmax(y)  # Only the first occurrence is returned.
@@ -303,7 +280,7 @@ def test():
     fpr, tpr, thresholds = metrics.roc_curve(test_label_all, test_prob_all)
     print(Find_Optimal_Cutoff(fpr, tpr, thresholds))
 
-    # #############画图部分  # roc_auc = metrics.auc(fpr, tpr)  # plt.figure(figsize=(6,6))  # plt.title('Validation ROC')  # plt.plot(fpr, tpr, 'b', label = 'Val AUC = %0.4f' % roc_auc)  # plt.legend(loc = 'lower right')  # plt.plot([0, 1], [0, 1],'r--')  # plt.xlim([0, 1])  # plt.ylim([0, 1])  # plt.ylabel('True Positive Rate')  # plt.xlabel('False Positive Rate')  # plt.show()
+    # roc_auc = metrics.auc(fpr, tpr)  # plt.figure(figsize=(6,6))  # plt.title('Validation ROC')  # plt.plot(fpr, tpr, 'b', label = 'Val AUC = %0.4f' % roc_auc)  # plt.legend(loc = 'lower right')  # plt.plot([0, 1], [0, 1],'r--')  # plt.xlim([0, 1])  # plt.ylim([0, 1])  # plt.ylabel('True Positive Rate')  # plt.xlabel('False Positive Rate')  # plt.show()
 
 
 def get_data_loader_multi(save_directory, batch_size=1):
@@ -402,9 +379,10 @@ eeg_type = 'stft'  # 'original', 'bipolar', 'stft'
 device = 'cuda:0'
 # device = 'cpu'
 
-model = torch.load('inference_ck_0.9208', map_location=torch.device(device))
-# model = torch.load('/home/amirshah/EPFL/EpilepsyTransformer/TUSZv2/preprocess/test3/test_model_0.867288059115128',
-#                    map_location=torch.device(device))
+# model = torch.load('inference_ck_0.9208', map_location=torch.device(device))
+model = torch.load('/home/amirshah/EPFL/EpilepsyTransformer/TUSZv2/preprocess/test_8ch/test_model_0.857282265148981',
+# model = torch.load('/home/amirshah/EPFL/EpilepsyTransformer/TUSZv2/preprocess/test_8ch_channels6/test_model_58_0.801697965546743',
+                   map_location=torch.device(device))
 model.eval()
 sigmoid = nn.Sigmoid()
 

@@ -5,6 +5,7 @@ from multiprocessing import Pool
 from random import shuffle
 import math
 import numpy as np
+import random
 import pyedflib
 from scipy.signal import stft
 from torch.utils.data import DataLoader, Dataset
@@ -23,9 +24,23 @@ parser.add_argument('--data_type', type=str, default='dev', choices=['train', 'e
 parser.add_argument('--task_type', type=str, default='binary', choices=['binary'])
 parser.add_argument('--slice_length', type=int, default=12)
 parser.add_argument('--eeg_type', type=str, default='stft', choices=['original', 'bipolar', 'stft'])
+parser.add_argument('--selected_channels', type=int, default=-1)
 args = parser.parse_args()
 
 GLOBAL_INFO = {}
+
+channels_groups = [
+    [0, 1, 2, 3, 4, 5, 6, 7],
+    [0, 2, 4, 6, 12, 14, 16, 18],
+    [1, 3, 5, 7, 13, 15, 17, 19],
+    [0, 1, 12, 13, 14, 15, 10, 11],
+    [6, 7, 10, 11, 16, 17, 18, 19],
+    [0, 1, 4, 5, 14, 15, 18, 19],
+    [0, 1, 2, 3, 12, 13, 14, 15],
+    [1, 3, 4, 7, 8, 12, 13, 14], # RANDOM
+    [0, 2, 3, 5, 14, 16, 17, 19], # RANDOM
+    [0, 3, 4, 6, 7, 9, 17, 19], # RANDOM
+]
 
 
 def search_walk(info):
@@ -43,28 +58,52 @@ def search_walk(info):
     return searched_list
 
 
-def bipolar_signals_func(signals):
-    bipolar_signals = []
-    bipolar_signals.append(signals[0] - signals[4])  # fp1-f7
-    bipolar_signals.append(signals[1] - signals[5])  # fp2-f8
-    bipolar_signals.append(signals[4] - signals[9])  # f7-t3
-    bipolar_signals.append(signals[5] - signals[10])  # f8-t4
-    bipolar_signals.append(signals[9] - signals[15])  # t3-t5
-    bipolar_signals.append(signals[10] - signals[16])  # t4-t6
-    bipolar_signals.append(signals[15] - signals[13])  # t5-o1
-    bipolar_signals.append(signals[16] - signals[14])  # t6-o2
-    bipolar_signals.append(signals[9] - signals[6])  # t3-c3
-    bipolar_signals.append(signals[7] - signals[10])  # c4-t4
-    bipolar_signals.append(signals[6] - signals[8])  # c3-cz
-    bipolar_signals.append(signals[8] - signals[7])  # cz-c4
-    bipolar_signals.append(signals[0] - signals[2])  # fp1-f3
-    bipolar_signals.append(signals[1] - signals[3])  # fp2-f4
-    bipolar_signals.append(signals[2] - signals[6])  # f3-c3
-    bipolar_signals.append(signals[3] - signals[7])  # f4-c4
-    bipolar_signals.append(signals[6] - signals[11])  # c3-p3
-    bipolar_signals.append(signals[7] - signals[12])  # c4-p4
-    bipolar_signals.append(signals[11] - signals[13])  # p3-o1
-    bipolar_signals.append(signals[12] - signals[14])  # p4-o2
+def bipolar_signals_func(signals, selected_channels=None):
+    """
+    The function accepts a list of signals as input and returns a list of 20 bipolar signals, where 8 randomly selected
+     elements are computed from the input signals, and the remaining 12 elements are NumPy zeros with the same shape as
+      the input signals. The order of the original bipolar signals is preserved, ensuring that the position of the
+       non-zero elements in the output list corresponds to their position in the original bipolar signals computation.
+
+    Args:
+        a list of input signals
+
+    Returns:
+        the computed bipolar signals list with randomly selected elements and the remaining elements as zeros,
+        while maintaining the order of the original bipolar signals.
+
+    """
+    all_bipolar_signals = [
+        signals[0] - signals[4],   # fp1-f7
+        signals[1] - signals[5],   # fp2-f8
+        signals[4] - signals[9],   # f7-t3
+        signals[5] - signals[10],  # f8-t4
+        signals[9] - signals[15],  # t3-t5
+        signals[10] - signals[16], # t4-t6
+        signals[15] - signals[13], # t5-o1
+        signals[16] - signals[14], # t6-o2
+        signals[9] - signals[6],   # t3-c3
+        signals[7] - signals[10],  # c4-t4
+        signals[6] - signals[8],   # c3-cz
+        signals[8] - signals[7],   # cz-c4
+        signals[0] - signals[2],   # fp1-f3
+        signals[1] - signals[3],   # fp2-f4
+        signals[2] - signals[6],   # f3-c3
+        signals[3] - signals[7],   # f4-c4
+        signals[6] - signals[11],  # c3-p3
+        signals[7] - signals[12],  # c4-p4
+        signals[11] - signals[13], # p3-o1
+        signals[12] - signals[14]  # p4-o2
+    ]
+
+    if selected_channels is None or selected_channels == -1:
+        indices = list(range(len(all_bipolar_signals)))
+        random.shuffle(indices)
+        selected_indices = set(indices[:8])
+    else:
+        selected_indices = channels_groups[selected_channels]
+    bipolar_signals = [all_bipolar_signals[i] if i in selected_indices else
+                       np.zeros_like(signals[0]) for i in range(len(all_bipolar_signals))]
 
     return bipolar_signals
 
@@ -85,10 +124,11 @@ def spectrogram_unfold_feature(signals):
 
 
 class TUHDataset(Dataset):
-    def __init__(self, file_list, transform=None):
+    def __init__(self, file_list, transform=None, selected_channels=None):
         self.file_list = file_list
         self.file_length = len(self.file_list)
         self.transform = transform
+        self.selected_channels = selected_channels
 
     def __len__(self):
         return self.file_length
@@ -97,7 +137,7 @@ class TUHDataset(Dataset):
         with open(self.file_list[idx], 'rb') as f:
             data_pkl = pickle.load(f)
 
-            signals = np.asarray(bipolar_signals_func(data_pkl['signals']))
+            signals = np.asarray(bipolar_signals_func(data_pkl['signals'], self.selected_channels))
             # print(signals.shape)
 
             if args.eeg_type == 'stft':
@@ -143,27 +183,20 @@ def get_data_loader(batch_size):
     shuffle(train_data)
     print('len(train_data): {}'.format(len(train_data)))
 
-    # bckg_data = file_lists['val']['bckg'] + file_lists['test']['bckg']
-    # shuffle(bckg_data)
-    #
-    # seiz_data = file_lists['val']['seiz'] + file_lists['test']['seiz']
-    # shuffle(seiz_data)
+    bckg_data = file_lists['val']['bckg'] + file_lists['test']['bckg']
+    shuffle(bckg_data)
 
-    # val_data = bckg_data[:int(len(bckg_data) / 2)] + seiz_data[:int(len(seiz_data) / 2)]
-    # shuffle(val_data)
-    # print('len(val_data): {}'.format(len(val_data)))
-    #
-    # test_data = bckg_data[int(len(bckg_data) / 2):] + seiz_data[int(len(seiz_data) / 2):]
-    # shuffle(test_data)
-    # print('len(test_data): {}'.format(len(test_data)))
+    seiz_data = file_lists['val']['seiz'] + file_lists['test']['seiz']
+    shuffle(seiz_data)
 
-    val_data = file_lists['val']['bckg'] + file_lists['val']['seiz']
+    val_data = bckg_data[:int(len(bckg_data) / 2)] + seiz_data[:int(len(seiz_data) / 2)]
     shuffle(val_data)
     print('len(val_data): {}'.format(len(val_data)))
 
-    test_data = file_lists['test']['bckg'] + file_lists['test']['seiz']
+    test_data = bckg_data[int(len(bckg_data) / 2):] + seiz_data[int(len(seiz_data) / 2):]
     shuffle(test_data)
     print('len(test_data): {}'.format(len(test_data)))
+    print('First 10 test data: {}'.format([filename.split('/')[-1] for filename in test_data[:10]]))
 
     train_transforms = transforms.Compose(
         [
@@ -183,13 +216,13 @@ def get_data_loader(batch_size):
         ]
     )
 
-    train_data = TUHDataset(train_data, transform=train_transforms)
-    val_data = TUHDataset(val_data, transform=val_transforms)
-    test_data = TUHDataset(test_data, transform=test_transforms)
+    train_data = TUHDataset(train_data, transform=train_transforms, selected_channels=args.selected_channels)
+    val_data = TUHDataset(val_data, transform=val_transforms, selected_channels=args.selected_channels)
+    test_data = TUHDataset(test_data, transform=test_transforms, selected_channels=args.selected_channels)
 
-    train_loader = DataLoader(dataset=train_data, batch_size=batch_size, shuffle=True, num_workers=8)
-    val_loader = DataLoader(dataset=val_data, batch_size=math.ceil(len(val_data) / 50), shuffle=False, num_workers=8)
-    test_loader = DataLoader(dataset=test_data, batch_size=math.ceil(len(test_data) / 50), shuffle=False, num_workers=8)
+    train_loader = DataLoader(dataset=train_data, batch_size=batch_size, shuffle=True, num_workers=2)
+    val_loader = DataLoader(dataset=val_data, batch_size=math.ceil(len(val_data) / 50), shuffle=False, num_workers=2)
+    test_loader = DataLoader(dataset=test_data, batch_size=math.ceil(len(test_data) / 50), shuffle=False, num_workers=2)
 
     return train_loader, val_loader, test_loader
 
