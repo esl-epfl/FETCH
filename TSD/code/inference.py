@@ -23,6 +23,7 @@ from epilepsy_performance_metrics.src.timescoring.annotations import Annotation
 from epilepsy_performance_metrics.src.timescoring.annotations import Annotation
 import torch.multiprocessing
 torch.multiprocessing.set_sharing_strategy('file_system')
+from sklearn.metrics import precision_recall_curve, confusion_matrix
 
 from tuh_dataset import channels_groups, bipolar_signals_func
 
@@ -151,9 +152,6 @@ class EEGVT(nn.Module):
         return self.mlp_head(x)
 
 
-
-
-
 def spectrogram_unfold_feature(signals):
     nperseg = 250
     noverlap = 50
@@ -169,40 +167,43 @@ def spectrogram_unfold_feature(signals):
     return freqs, times, amp
 
 
-class TUHDataset(Dataset):
-    def __init__(self, file_list, transform=None):
-        self.file_list = file_list
-        self.file_length = len(self.file_list)
-        self.transform = transform
+# class TUHDataset(Dataset):
+#     def __init__(self, file_list, transform=None):
+#         self.file_list = file_list
+#         self.file_length = len(self.file_list)
+#         self.transform = transform
+#
+#     def __len__(self):
+#         return self.file_length
+#
+#     def __getitem__(self, idx):
+#         with open(self.file_list[idx], 'rb') as f:
+#             data_pkl = pickle.load(f)
+#
+#             signals = np.asarray(bipolar_signals_func(data_pkl['signals'], 6))
+#             # print(signals.shape)
+#
+#             if eeg_type == 'stft':
+#                 f, t, signals = spectrogram_unfold_feature(signals)  # print(signals.shape)  # exit()
+#
+#             signals = self.transform(signals)
+#             label = data_pkl['label']
+#             label = 0. if label == "bckg" else 1.
+#
+#             patient_id = data_pkl['patient id']
+#             # bipolar_channel_name = data_pkl['bipolar_channel_name']
+#             confidence = data_pkl['confidence']
+#
+#         return signals, label, data_pkl['label']
 
-    def __len__(self):
-        return self.file_length
-
-    def __getitem__(self, idx):
-        with open(self.file_list[idx], 'rb') as f:
-            data_pkl = pickle.load(f)
-
-            signals = np.asarray(bipolar_signals_func(data_pkl['signals'], 6))
-            # print(signals.shape)
-
-            if eeg_type == 'stft':
-                f, t, signals = spectrogram_unfold_feature(signals)  # print(signals.shape)  # exit()
-
-            signals = self.transform(signals)
-            label = data_pkl['label']
-            label = 0. if label == "bckg" else 1.
-
-            patient_id = data_pkl['patient id']
-            # bipolar_channel_name = data_pkl['bipolar_channel_name']
-            confidence = data_pkl['confidence']
-
-        return signals, label, data_pkl['label']
 
 def get_data_loader(save_directory, batch_size=1):
     file_dir = {'train': os.path.join(save_directory, 'task-binary_datatype-train'),
                 'val': os.path.join(save_directory, 'task-binary_datatype-eval'),
                 'test': os.path.join(save_directory, 'task-binary_datatype-dev')}
-    file_lists = {'train': {'bckg': [], 'seiz': []}, 'val': {'bckg': [], 'seiz': []}, 'test': {'bckg': [], 'seiz': []}}
+    file_lists = {'train': {'bckg': [], 'seiz': []},
+                  'val': {'bckg': [], 'seiz': []},
+                  'test': {'bckg': [], 'seiz': []}}
 
     for dirname in file_dir.keys():
         filenames = os.listdir(file_dir[dirname])
@@ -245,16 +246,50 @@ def get_data_loader(save_directory, batch_size=1):
     return train_loader, val_loader, test_loader
 
 
+def thresh_max_f1(y_true, y_prob):
+    """
+    Find best threshold based on precision-recall curve to maximize F1-score.
+    Binary calssification only
+    """
+    if len(set(y_true)) > 2:
+        raise NotImplementedError
+
+    precision, recall, thresholds = precision_recall_curve(y_true, y_prob)
+    thresh_filt = []
+    fscore = []
+    n_thresh = len(thresholds)
+    for idx in range(n_thresh):
+        curr_f1 = (2 * precision[idx] * recall[idx]) / \
+            (precision[idx] + recall[idx])
+        if not (np.isnan(curr_f1)):
+            fscore.append(curr_f1)
+            thresh_filt.append(thresholds[idx])
+    # locate the index of the largest f score
+    ix = np.argmax(np.array(fscore))
+    best_thresh = thresh_filt[ix]
+    return best_thresh
+
+
 def test():
     print(device)
     save_directory = '/home/amirshah/EPFL/EpilepsyTransformer/TUSZv2/preprocess'
     train_loader, val_loader, test_loader = get_data_loader(save_directory, 32)
 
-    test_label_all = []
-    test_prob_all = np.zeros(0, dtype=np.float)
+    val_label_all = []
+    val_prob_all = np.zeros(0, dtype=np.float)
+    with torch.no_grad():
+        for data, label in tqdm(val_loader):
+            val_label_all.extend(label)
+            val_prob = model(data.to(device))
 
-    time_consumes = []
-    start_time = time.perf_counter()
+            val_prob = torch.squeeze(sigmoid(val_prob))
+            val_prob_all = np.concatenate((val_prob_all, val_prob.cpu().numpy()))
+
+    best_th = thresh_max_f1(val_label_all, val_prob_all)
+    print("Best threshold : ", best_th)
+
+    test_label_all = []
+
     with torch.no_grad():
         for data, label in tqdm(test_loader):
             test_label_all.extend(label)
@@ -263,14 +298,8 @@ def test():
             test_prob = torch.squeeze(sigmoid(test_prob))
             test_prob_all = np.concatenate((test_prob_all, test_prob.cpu().numpy()))
 
-            # annotation_labels = Annotation(label.cpu().numpy(), 1/12)
-            # annotation_pred = Annotation(test_prob.cpu().numpy(), 1/12)
-            # scores =
-
-    test_auc = roc_auc_score(test_label_all, test_prob_all)
-    time_consumes.append(time.perf_counter() - start_time)
-    print(f"test_auc: {test_auc}")
-    print('total_time: {}'.format(sum(time_consumes) / len(time_consumes)))
+    test_predict_all = np.where(test_prob_all > best_th, 1, 0)
+    print("Test confusion matrix: ", confusion_matrix(test_label_all, test_predict_all))
     # def Find_Optimal_Cutoff(FPR, TPR, thresholds):
     #     y = TPR - FPR
     #     Youden_index = np.argmax(y)  # Only the first occurrence is returned.
