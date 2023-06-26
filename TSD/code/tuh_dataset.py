@@ -154,10 +154,10 @@ class TUHDataset(Dataset):
         return signals, label
 
 
-def get_data_loader(batch_size):
-    file_dir = {'train': os.path.join(args.save_directory, 'task-binary_datatype-train'),
-                'val': os.path.join(args.save_directory, 'task-binary_datatype-eval'),
-                'test': os.path.join(args.save_directory, 'task-binary_datatype-dev')}
+def get_data_loader(batch_size, save_dir=args.save_directory):
+    file_dir = {'train': os.path.join(save_dir, 'task-binary_datatype-train'),
+                'val': os.path.join(save_dir, 'task-binary_datatype-eval'),
+                'test': os.path.join(save_dir, 'task-binary_datatype-dev')}
     file_lists = {'train': {'bckg': [], 'seiz': []}, 'val': {'bckg': [], 'seiz': []}, 'test': {'bckg': [], 'seiz': []}}
 
     for dirname in file_dir.keys():

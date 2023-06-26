@@ -18,7 +18,7 @@ from scipy.signal import stft
 from tqdm import tqdm
 from einops import rearrange, repeat
 from einops.layers.torch import Rearrange
-from tuh_dataset import TUHDataset
+from tuh_dataset import TUHDataset, get_data_loader
 from epilepsy_performance_metrics.src.timescoring.annotations import Annotation
 from epilepsy_performance_metrics.src.timescoring.annotations import Annotation
 import torch.multiprocessing
@@ -224,7 +224,7 @@ def thresh_max_f1(y_true, y_prob):
 def test():
     print(device)
     save_directory = '/home/amirshah/EPFL/EpilepsyTransformer/TUSZv2/preprocess'
-    train_loader, val_loader, test_loader = get_data_loader(save_directory, 32)
+    train_loader, val_loader, test_loader = get_data_loader(32, save_directory)
 
     val_label_all = []
     val_prob_all = np.zeros(0, dtype=np.float)
