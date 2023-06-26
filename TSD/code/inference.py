@@ -279,16 +279,18 @@ def test():
     val_prob_all = np.zeros(0, dtype=np.float)
     with torch.no_grad():
         for data, label in tqdm(val_loader):
-            val_label_all.extend(label)
+            val_label_all.extend(label.cpu().numpy())
             val_prob = model(data.to(device))
 
             val_prob = torch.squeeze(sigmoid(val_prob))
             val_prob_all = np.concatenate((val_prob_all, val_prob.cpu().numpy()))
 
+    print(set(val_label_all))
     best_th = thresh_max_f1(val_label_all, val_prob_all)
     print("Best threshold : ", best_th)
 
     test_label_all = []
+    test_prob_all = np.zeros(0, dtype=np.float)
 
     with torch.no_grad():
         for data, label in tqdm(test_loader):
@@ -300,6 +302,8 @@ def test():
 
     test_predict_all = np.where(test_prob_all > best_th, 1, 0)
     print("Test confusion matrix: ", confusion_matrix(test_label_all, test_predict_all))
+
+    print("AUROC result: ", roc_auc_score(test_label_all, test_prob_all))
     # def Find_Optimal_Cutoff(FPR, TPR, thresholds):
     #     y = TPR - FPR
     #     Youden_index = np.argmax(y)  # Only the first occurrence is returned.
