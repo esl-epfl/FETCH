@@ -197,55 +197,6 @@ def spectrogram_unfold_feature(signals):
 #         return signals, label, data_pkl['label']
 
 
-def get_data_loader(save_directory, batch_size=1):
-    file_dir = {'train': os.path.join(save_directory, 'task-binary_datatype-train'),
-                'val': os.path.join(save_directory, 'task-binary_datatype-eval'),
-                'test': os.path.join(save_directory, 'task-binary_datatype-dev')}
-    file_lists = {'train': {'bckg': [], 'seiz': []},
-                  'val': {'bckg': [], 'seiz': []},
-                  'test': {'bckg': [], 'seiz': []}}
-
-    for dirname in file_dir.keys():
-        filenames = os.listdir(file_dir[dirname])
-        for filename in filenames:
-            if 'bckg' in filename:
-                file_lists[dirname]['bckg'].append(os.path.join(file_dir[dirname], filename))
-            elif 'seiz' in filename:
-                file_lists[dirname]['seiz'].append(os.path.join(file_dir[dirname], filename))
-            else:
-                print('------------------------  error  ------------------------')
-                exit(-1)
-
-    train_data = file_lists['train']['bckg'] + file_lists['train']['seiz'] * int(
-        len(file_lists['train']['bckg']) / len(file_lists['train']['seiz']))
-    shuffle(train_data)
-    print('len(train_data): {}'.format(len(train_data)))
-
-    val_data = file_lists['val']['bckg'] + file_lists['val']['seiz']
-    shuffle(val_data)
-    print('len(val_data): {}'.format(len(val_data)))
-
-    test_data = file_lists['test']['bckg'] + file_lists['test']['seiz']
-    shuffle(test_data)
-    print('len(test_data): {}'.format(len(test_data)))
-
-    train_transforms = transforms.Compose([transforms.ToTensor(), ])
-
-    val_transforms = transforms.Compose([transforms.ToTensor(), ])
-
-    test_transforms = transforms.Compose([transforms.ToTensor(), ])
-
-    train_data = TUHDataset(train_data, transform=train_transforms)
-    val_data = TUHDataset(val_data, transform=val_transforms)
-    test_data = TUHDataset(test_data, transform=test_transforms)
-
-    train_loader = DataLoader(dataset=train_data, batch_size=batch_size, shuffle=True, num_workers=8)
-    val_loader = DataLoader(dataset=val_data, batch_size=batch_size, shuffle=False, num_workers=8)
-    test_loader = DataLoader(dataset=test_data, batch_size=batch_size, shuffle=False, num_workers=8)
-
-    return train_loader, val_loader, test_loader
-
-
 def thresh_max_f1(y_true, y_prob):
     """
     Find best threshold based on precision-recall curve to maximize F1-score.

@@ -182,20 +182,10 @@ def get_data_loader(batch_size):
     shuffle(train_data)
     print('len(train_data): {}'.format(len(train_data)))
 
-    bckg_data = file_lists['val']['bckg'] + file_lists['test']['bckg']
-    shuffle(bckg_data)
-
-    seiz_data = file_lists['val']['seiz'] + file_lists['test']['seiz']
-    shuffle(seiz_data)
-
-    val_data = bckg_data[:int(len(bckg_data) / 2)] + seiz_data[:int(len(seiz_data) / 2)]
-    shuffle(val_data)
+    val_data = file_lists['val']['bckg'] + file_lists['val']['seiz']
+    test_data = file_lists['test']['bckg'] + file_lists['test']['seiz']
     print('len(val_data): {}'.format(len(val_data)))
-
-    test_data = bckg_data[int(len(bckg_data) / 2):] + seiz_data[int(len(seiz_data) / 2):]
-    shuffle(test_data)
     print('len(test_data): {}'.format(len(test_data)))
-    print('First 10 test data: {}'.format([filename.split('/')[-1] for filename in test_data[:10]]))
 
     train_transforms = transforms.Compose(
         [
