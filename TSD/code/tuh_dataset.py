@@ -6,21 +6,23 @@ from random import shuffle
 import math
 import numpy as np
 import random
+import pandas as pd
 import pyedflib
-from scipy.signal import stft
+from scipy.signal import stft, resample
+from scipy.signal import filtfilt, butter
 from torch.utils.data import DataLoader, Dataset
 from torchvision.transforms import transforms
 from tqdm import tqdm
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--seed', type=int, default=999)
-parser.add_argument('--sample_rate', type=int, default=250)
+parser.add_argument('--sample_rate', type=int, default=256)
 parser.add_argument('--data_directory', type=str, default='/home/amirshah/EPFL/TUSZv2')
 parser.add_argument('--save_directory', type=str,
                     default='/home/amirshah/EPFL/EpilepsyTransformer/TUSZv2/preprocess')
 parser.add_argument('--label_type', type=str, default='csv_bi')
 parser.add_argument('--cpu_num', type=int, default=32)
-parser.add_argument('--data_type', type=str, default='dev', choices=['train', 'eval', 'dev'])
+parser.add_argument('--data_type', type=str, default='eval', choices=['train', 'eval', 'dev'])
 parser.add_argument('--task_type', type=str, default='binary', choices=['binary'])
 parser.add_argument('--slice_length', type=int, default=12)
 parser.add_argument('--eeg_type', type=str, default='stft', choices=['original', 'bipolar', 'stft'])
@@ -41,6 +43,7 @@ channels_groups = [
     [0, 2, 3, 5, 14, 16, 17, 19], # RANDOM
     [0, 3, 4, 6, 7, 9, 17, 19], # RANDOM
 ]
+TUSZv2_info_df = pd.read_json('../../input/TUSZv2_info.json')
 
 
 def search_walk(info):
@@ -136,9 +139,9 @@ class TUHDataset(Dataset):
     def __getitem__(self, idx):
         with open(self.file_list[idx], 'rb') as f:
             data_pkl = pickle.load(f)
-
-            signals = np.asarray(bipolar_signals_func(data_pkl['signals'], self.selected_channels))
-            # print(signals.shape)
+            signals = np.asarray(data_pkl['signals'])
+            if signals.shape != (20, 3072):
+                print("Error in shape: ", signals.shape)
 
             if args.eeg_type == 'stft':
                 f, t, signals = spectrogram_unfold_feature(signals)
@@ -148,10 +151,6 @@ class TUHDataset(Dataset):
             signals = self.transform(signals)
             label = data_pkl['label']
             label = 0. if label == "bckg" else 1.
-
-            patient_id = data_pkl['patient id']
-            confidence = data_pkl['confidence']
-
         return signals, label
 
 
@@ -263,11 +262,11 @@ def read_edf(edf_file, ch_nrs=None, ch_names=None, digital=False, verbose=False)
     header : dict
         the main header of the EDF file containing meta information.
     """
-    assert (ch_nrs is  None) or (ch_names is None), \
-           'names xor numbers should be supplied'
+    assert (ch_nrs is None) or (ch_names is None), \
+        'names xor numbers should be supplied'
     if ch_nrs is not None and not isinstance(ch_nrs, list): ch_nrs = [ch_nrs]
     if ch_names is not None and \
-        not isinstance(ch_names, list): ch_names = [ch_names]
+            not isinstance(ch_names, list): ch_names = [ch_names]
 
     with pyedflib.EdfReader(edf_file) as f:
         # see which channels we want to load
@@ -285,11 +284,11 @@ def read_edf(edf_file, ch_nrs=None, ch_names=None, digital=False, verbose=False)
 
         # if there ch_nrs is not given, load all channels
 
-        if ch_nrs is None: # no numbers means we load all
+        if ch_nrs is None:  # no numbers means we load all
             ch_nrs = range(n_chrs)
 
         # convert negative numbers into positives
-        ch_nrs = [n_chrs+ch if ch<0 else ch for ch in ch_nrs]
+        ch_nrs = [n_chrs + ch if ch < 0 else ch for ch in ch_nrs]
 
         # load headers, signal information and
         header = f.getHeader()
@@ -297,77 +296,79 @@ def read_edf(edf_file, ch_nrs=None, ch_names=None, digital=False, verbose=False)
 
         # add annotations to header
         annotations = f.readAnnotations()
-        annotations = [[s, d, a] for s,d,a in zip(*annotations)]
+        annotations = [[s, d, a] for s, d, a in zip(*annotations)]
         header['annotations'] = annotations
 
-
         signals = []
-        for i,c in enumerate(tqdm(ch_nrs, desc='Reading Channels',
-                                  disable=not verbose)):
+        for i, c in enumerate(tqdm(ch_nrs, desc='Reading Channels',
+                                   disable=not verbose)):
             signal = f.readSignal(c, digital=digital)
             signals.append(signal)
 
         # we can only return a np.array if all signals have the same samplefreq
         sfreqs = [_get_sample_frequency(shead) for shead in signal_headers]
-        all_sfreq_same = sfreqs[1:]==sfreqs[:-1]
+        all_sfreq_same = sfreqs[1:] == sfreqs[:-1]
         if all_sfreq_same:
             dtype = np.int32 if digital else float
             signals = np.array(signals, dtype=dtype)
 
-    assert len(signals)==len(signal_headers), 'Something went wrong, lengths'\
-                                         ' of headers is not length of signals'
+    assert len(signals) == len(signal_headers), 'Something went wrong, lengths' \
+                                                ' of headers is not length of signals'
     del f
     return signals, signal_headers, header
 
 
 def generate_lead_wise_data(edf_file):
-    label_lines = open(edf_file.replace('.edf', '.' + GLOBAL_INFO['label_type']), 'r').readlines()
-    assert label_lines[5].strip().startswith('channel,')
-    label_lists = [line.strip().split(',') for line in label_lines[6:]]
-
-    channels_all = []
-    channels_use = []
-    signal_list = []
-    signal_list_ordered = []
+    filename = edf_file.split('/')[-1].split('.edf')[0]
     signals, signal_headers, header = read_edf(edf_file)
-    for idx, signal in enumerate(signals):
-        channel_no_ref = signal_headers[idx]['label'].strip().split("-")[0]
-        channels_all.append(channel_no_ref)
-        if channel_no_ref not in GLOBAL_INFO['channel_list']:
+    file_info = TUSZv2_info_df.loc[filename]
+    fs = file_info['sampling_frequency']
+    length = file_info['length']
+    labels = file_info['labels']
+    num_target_samples = length * GLOBAL_INFO['sample_rate']
+    signal_list = []
+    disease_labels = {0: 'bckg', 1: 'seiz'}
+    for bipolar_channel in file_info['bipolar_montage']:
+        x = bipolar_channel[0]
+        y = bipolar_channel[1]
+
+        if x == -1 or y == -1:
+            signal_list.append(np.zeros(num_target_samples))
             continue
 
-        channels_use.append(channel_no_ref)
-        signal_list.append(signal)
+        bipolar_signal = signals[x] - signals[y]
+        # Define the band-pass filter parameters
+        lowcut = 0.1  # Lower cutoff frequency in Hz
+        highcut = 80  # Upper cutoff frequency in Hz
+        order = 4  # Filter order (adjust as needed)
 
-    if not all(channel in channels_use for channel in GLOBAL_INFO['channel_list']):
-        print(channels_use)
-        print(GLOBAL_INFO['channel_list'])
-        return
+        # Calculate the normalized cutoff frequencies
+        nyquist_freq = 0.5 * fs  # Nyquist frequency
+        low = lowcut / nyquist_freq
+        high = highcut / nyquist_freq
 
-    for channel in GLOBAL_INFO['channel_list']:
-        signal_list_ordered.append(signal_list[channels_use.index(channel)])
+        # Design and apply the band-pass filter
+        b, a = butter(order, [low, high], btype='band')
+        bipolar_signal_filtered = filtfilt(b, a, bipolar_signal)
 
-    signal_list_ordered = np.asarray(signal_list_ordered)
+        if fs != GLOBAL_INFO['sample_rate']:
+            bipolar_signal_resampled = resample(bipolar_signal_filtered, num_target_samples)
+            signal_list.append(bipolar_signal_resampled)
+        else:
+            signal_list.append(bipolar_signal_filtered)
 
-    for label_list in label_lists:
-        start_time = float(label_list[1].strip())
-        end_time = float(label_list[2].strip())
-        if end_time - start_time < GLOBAL_INFO['slice_length']:
-            continue
+    signal_list_ordered = np.asarray(signal_list)
 
-        label = label_list[3].strip()
-        confidence = float(label_list[4].strip())
+    for i, label in enumerate(labels):
+        slice_eeg = signal_list_ordered[:,
+                    int(i * GLOBAL_INFO['slice_length']) * GLOBAL_INFO['sample_rate']:
+                    int((i + 1) * GLOBAL_INFO['slice_length']) * GLOBAL_INFO['sample_rate']]
 
-        for i in range(int((end_time - start_time) / GLOBAL_INFO['slice_length'])):
-            slice_eeg = signal_list_ordered[:,
-                        int(start_time + i * GLOBAL_INFO['slice_length']) * GLOBAL_INFO['sample_rate']:
-                        int(start_time + (i + 1) * GLOBAL_INFO['slice_length']) * GLOBAL_INFO['sample_rate']]
-
-            with open("{}/{}_label_{}_confidence_{}_index_{}.pkl".format(GLOBAL_INFO['save_directory'],
-                                                                         edf_file.split('/')[-1].split('.')[0], label,
-                                                                         confidence, i), 'wb') as f:
-                pickle.dump({'signals': slice_eeg, 'patient id': edf_file.split('/')[-1].split('.')[0].split('_')[0],
-                             'label': label, 'confidence': confidence}, f)
+        with open("{}/{}_label_{}_index_{}.pkl".format(GLOBAL_INFO['save_directory'],
+                                                       edf_file.split('/')[-1].split('.')[0],
+                                                       disease_labels[label], i), 'wb') as f:
+            pickle.dump({'signals': slice_eeg, 'patient id': edf_file.split('/')[-1].split('.')[0].split('_')[0],
+                         'label': disease_labels[label]}, f)
 
 
 def run_multi_process(f, l: list, n_processes=1):
@@ -417,10 +418,9 @@ def main(args):
     with open(data_directory + '/preprocess_info.pickle', 'wb') as pkl:
         pickle.dump(GLOBAL_INFO, pkl, protocol=pickle.HIGHEST_PROTOCOL)
 
-    print(edf_list)
-    # for edf_file in tqdm(edf_list):
+    # for edf_file in tqdm(edf_list[:4]):
     #     generate_lead_wise_data(edf_file)
-    run_multi_process(generate_lead_wise_data, edf_list, n_processes=4)
+    run_multi_process(generate_lead_wise_data, edf_list, n_processes=6)
 
 
 if __name__ == '__main__':

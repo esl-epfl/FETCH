@@ -33,7 +33,7 @@ def seed_everything(seed=99):
 seed_everything()
 
 device = 'cuda'
-model = ViT(image_size=(5000, 14), patch_size=(50, 7), num_classes=1, dim=16, depth=4, heads=4, mlp_dim=4, pool='cls',
+model = ViT(image_size=(5120, 15), patch_size=(64, 5), num_classes=1, dim=16, depth=4, heads=4, mlp_dim=4, pool='cls',
             channels=1, dim_head=4, dropout=0.2, emb_dropout=0.2).to(device)
 sigmoid = nn.Sigmoid()
 
@@ -54,8 +54,8 @@ scheduler = StepLR(optimizer, step_size=1, gamma=gamma)
 train_loader, val_loader, test_loader = tuh_dataset.get_data_loader(batch_size)
 
 best_val_auc = 0.0
-model_directory = os.path.join(tuh_dataset.args.save_directory, 'test_8ch_channels{}'.format(tuh_dataset.args.selected_channels))
-os.mkdir(model_directory)
+model_directory = os.path.join(tuh_dataset.args.save_directory, 'test_v2')
+# os.mkdir(model_directory)
 for epoch in range(epochs):
 
     model.train()

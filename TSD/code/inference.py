@@ -18,6 +18,11 @@ from scipy.signal import stft
 from tqdm import tqdm
 from einops import rearrange, repeat
 from einops.layers.torch import Rearrange
+from tuh_dataset import TUHDataset
+from epilepsy_performance_metrics.src.timescoring.annotations import Annotation
+from epilepsy_performance_metrics.src.timescoring.annotations import Annotation
+import torch.multiprocessing
+torch.multiprocessing.set_sharing_strategy('file_system')
 
 from tuh_dataset import channels_groups, bipolar_signals_func
 
@@ -193,7 +198,6 @@ class TUHDataset(Dataset):
 
         return signals, label, data_pkl['label']
 
-
 def get_data_loader(save_directory, batch_size=1):
     file_dir = {'train': os.path.join(save_directory, 'task-binary_datatype-train'),
                 'val': os.path.join(save_directory, 'task-binary_datatype-eval'),
@@ -216,17 +220,11 @@ def get_data_loader(save_directory, batch_size=1):
     shuffle(train_data)
     print('len(train_data): {}'.format(len(train_data)))
 
-    bckg_data = file_lists['val']['bckg'] + file_lists['test']['bckg']
-    shuffle(bckg_data)
-
-    seiz_data = file_lists['val']['seiz'] + file_lists['test']['seiz']
-    shuffle(seiz_data)
-
-    val_data = bckg_data[:int(len(bckg_data) / 2)] + seiz_data[:int(len(seiz_data) / 2)]
+    val_data = file_lists['val']['bckg'] + file_lists['val']['seiz']
     shuffle(val_data)
     print('len(val_data): {}'.format(len(val_data)))
 
-    test_data = bckg_data[int(len(bckg_data) / 2):] + seiz_data[int(len(seiz_data) / 2):]
+    test_data = file_lists['test']['bckg'] + file_lists['test']['seiz']
     shuffle(test_data)
     print('len(test_data): {}'.format(len(test_data)))
 
@@ -240,9 +238,9 @@ def get_data_loader(save_directory, batch_size=1):
     val_data = TUHDataset(val_data, transform=val_transforms)
     test_data = TUHDataset(test_data, transform=test_transforms)
 
-    train_loader = DataLoader(dataset=train_data, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(dataset=val_data, batch_size=batch_size, shuffle=False)
-    test_loader = DataLoader(dataset=test_data, batch_size=batch_size, shuffle=False)
+    train_loader = DataLoader(dataset=train_data, batch_size=batch_size, shuffle=True, num_workers=8)
+    val_loader = DataLoader(dataset=val_data, batch_size=batch_size, shuffle=False, num_workers=8)
+    test_loader = DataLoader(dataset=test_data, batch_size=batch_size, shuffle=False, num_workers=8)
 
     return train_loader, val_loader, test_loader
 
@@ -258,29 +256,32 @@ def test():
     time_consumes = []
     start_time = time.perf_counter()
     with torch.no_grad():
-        for data, label, label_name in tqdm(test_loader):
+        for data, label in tqdm(test_loader):
             test_label_all.extend(label)
             test_prob = model(data.to(device))
 
             test_prob = torch.squeeze(sigmoid(test_prob))
             test_prob_all = np.concatenate((test_prob_all, test_prob.cpu().numpy()))
 
+            # annotation_labels = Annotation(label.cpu().numpy(), 1/12)
+            # annotation_pred = Annotation(test_prob.cpu().numpy(), 1/12)
+            # scores =
+
     test_auc = roc_auc_score(test_label_all, test_prob_all)
     time_consumes.append(time.perf_counter() - start_time)
     print(f"test_auc: {test_auc}")
     print('total_time: {}'.format(sum(time_consumes) / len(time_consumes)))
+    # def Find_Optimal_Cutoff(FPR, TPR, thresholds):
+    #     y = TPR - FPR
+    #     Youden_index = np.argmax(y)  # Only the first occurrence is returned.
+    #     optimal_threshold = thresholds[Youden_index]
+    #     point = [FPR[Youden_index], TPR[Youden_index]]
+    #     return optimal_threshold, point
+    #
+    # fpr, tpr, thresholds = metrics.roc_curve(test_label_all, test_prob_all)
+    # print(Find_Optimal_Cutoff(fpr, tpr, thresholds))
 
-    def Find_Optimal_Cutoff(FPR, TPR, thresholds):
-        y = TPR - FPR
-        Youden_index = np.argmax(y)  # Only the first occurrence is returned.
-        optimal_threshold = thresholds[Youden_index]
-        point = [FPR[Youden_index], TPR[Youden_index]]
-        return optimal_threshold, point
-
-    fpr, tpr, thresholds = metrics.roc_curve(test_label_all, test_prob_all)
-    print(Find_Optimal_Cutoff(fpr, tpr, thresholds))
-
-    # roc_auc = metrics.auc(fpr, tpr)  # plt.figure(figsize=(6,6))  # plt.title('Validation ROC')  # plt.plot(fpr, tpr, 'b', label = 'Val AUC = %0.4f' % roc_auc)  # plt.legend(loc = 'lower right')  # plt.plot([0, 1], [0, 1],'r--')  # plt.xlim([0, 1])  # plt.ylim([0, 1])  # plt.ylabel('True Positive Rate')  # plt.xlabel('False Positive Rate')  # plt.show()
+  # roc_auc = metrics.auc(fpr, tpr)  # plt.figure(figsize=(6,6))  # plt.title('Validation ROC')  # plt.plot(fpr, tpr, 'b', label = 'Val AUC = %0.4f' % roc_auc)  # plt.legend(loc = 'lower right')  # plt.plot([0, 1], [0, 1],'r--')  # plt.xlim([0, 1])  # plt.ylim([0, 1])  # plt.ylabel('True Positive Rate')  # plt.xlabel('False Positive Rate')  # plt.show()
 
 
 def get_data_loader_multi(save_directory, batch_size=1):
@@ -374,14 +375,13 @@ def test_run():
             # print(test_prob.cpu().numpy())
 
 
-sample_rate = 250
+sample_rate = 256
 eeg_type = 'stft'  # 'original', 'bipolar', 'stft'
 device = 'cuda:0'
 # device = 'cpu'
 
 # model = torch.load('inference_ck_0.9208', map_location=torch.device(device))
-model = torch.load('/home/amirshah/EPFL/EpilepsyTransformer/TUSZv2/preprocess/test_8ch/test_model_0.857282265148981',
-# model = torch.load('/home/amirshah/EPFL/EpilepsyTransformer/TUSZv2/preprocess/test_8ch_channels6/test_model_58_0.801697965546743',
+model = torch.load('/home/amirshah/EPFL/EpilepsyTransformer/TUSZv2/preprocess/test_v2/test_model_0.9374276011157442',
                    map_location=torch.device(device))
 model.eval()
 sigmoid = nn.Sigmoid()
