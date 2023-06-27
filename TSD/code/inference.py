@@ -224,12 +224,13 @@ def thresh_max_f1(y_true, y_prob):
 def test():
     print(device)
     save_directory = '/home/amirshah/EPFL/EpilepsyTransformer/TUSZv2/preprocess'
-    train_loader, val_loader, test_loader = get_data_loader(32, save_directory)
+    train_loader, val_loader, test_loader = get_data_loader(1, save_directory)
 
     val_label_all = []
     val_prob_all = np.zeros(0, dtype=np.float)
     with torch.no_grad():
         for data, label in tqdm(val_loader):
+            print("Data shape: ", data.shape)
             val_label_all.extend(label.cpu().numpy())
             val_prob = model(data.to(device))
 
@@ -253,16 +254,18 @@ def test():
 
             print("Data shape", data.shape, test_prob.shape)
 
-            annotation_ref = Annotation(label, 1/12)
-            annotation_hyp = Annotation(test_prob.cpu().numpy(), 1/12)
-            param = EventScoring.Parameters(
-                toleranceStart=30,
-                toleranceEnd=60,
-                minOverlap=0,
-                maxEventDuration=5 * 60,
-                minDurationBetweenEvents=90)
-            scores = EventScoring(annotation_ref, annotation_hyp, param)
-            print(scores.sensitivity, scores.precision, scores.f1, scores.fpRate)
+            for i in range(data.shape[0]):
+                annotation_ref = Annotation(label.cpu().numpy()[i], 1/12)
+                annotation_hyp = Annotation(test_prob[i].cpu().numpy(), 1/12)
+                param = EventScoring.Parameters(
+                    toleranceStart=30,
+                    toleranceEnd=60,
+                    minOverlap=0,
+                    maxEventDuration=5 * 60,
+                    minDurationBetweenEvents=90)
+                scores = EventScoring(annotation_ref, annotation_hyp, param)
+                print(scores.sensitivity, scores.precision, scores.f1, scores.fpRate)
+                print(scores.tp, scores.fp)
 
     test_predict_all = np.where(test_prob_all > best_th, 1, 0)
     print("Test confusion matrix: ", confusion_matrix(test_label_all, test_predict_all))

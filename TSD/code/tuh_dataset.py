@@ -27,6 +27,8 @@ parser.add_argument('--task_type', type=str, default='binary', choices=['binary'
 parser.add_argument('--slice_length', type=int, default=12)
 parser.add_argument('--eeg_type', type=str, default='stft', choices=['original', 'bipolar', 'stft'])
 parser.add_argument('--selected_channels', type=int, default=-1)
+parser.add_argument('--event_base', action='store_true', default=False, help='Set event_base to True')
+
 args = parser.parse_args()
 
 GLOBAL_INFO = {}
@@ -154,6 +156,56 @@ class TUHDataset(Dataset):
         return signals, label
 
 
+class TUHDatasetEvent(Dataset):
+    def __init__(self, recording_list, transform=None):
+        self.recording_list = recording_list
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.recording_list)
+
+    def __getitem__(self, idx):
+        filenames = self.recording_list[idx]
+        recording_signals = []
+        recording_labels = []
+        for filename in filenames:
+            with open(filename, 'rb') as f:
+                data_pkl = pickle.load(f)
+                signals = np.asarray(data_pkl['signals'])
+                if signals.shape != (20, 3072):
+                    print("Error in shape: ", signals.shape)
+
+                if args.eeg_type == 'stft':
+                    f, t, signals = spectrogram_unfold_feature(signals)
+                    # print(signals.shape)
+                    # exit()
+
+                signals = self.transform(signals)
+                recording_signals.append(signals)
+                label = data_pkl['label']
+                label = 0. if label == "bckg" else 1.
+                recording_labels.append(label)
+        return recording_signals, recording_labels
+
+
+def separate_and_sort_filenames(filenames):
+    parts_dict = {}
+    for filename in filenames:
+        key = filename.split('_label')[0]
+        index = int(filename.split('index_')[-1].split('.pkl')[0])
+        if key not in parts_dict:
+            parts_dict[key] = []
+        parts_dict[key].append((filename, index))
+
+    sorted_lists = []
+    for key, value in parts_dict.items():
+        sorted_values = sorted(value, key=lambda x: x[1])
+        sorted_list = [filename for filename, index in sorted_values]
+        sorted_lists.append(sorted_list)
+
+    return sorted_lists
+
+
 def get_data_loader(batch_size, save_dir=args.save_directory):
     file_dir = {'train': os.path.join(save_dir, 'task-binary_datatype-train'),
                 'val': os.path.join(save_dir, 'task-binary_datatype-eval'),
@@ -206,12 +258,16 @@ def get_data_loader(batch_size, save_dir=args.save_directory):
     )
 
     train_data = TUHDataset(train_data, transform=train_transforms, selected_channels=args.selected_channels)
-    val_data = TUHDataset(val_data, transform=val_transforms, selected_channels=args.selected_channels)
-    test_data = TUHDataset(test_data, transform=test_transforms, selected_channels=args.selected_channels)
+    if args.event_base:
+        val_data = TUHDatasetEvent(separate_and_sort_filenames(val_data), transform=val_transforms)
+        test_data = TUHDatasetEvent(separate_and_sort_filenames(test_data), transform=test_transforms)
+    else:
+        val_data = TUHDataset(val_data, transform=val_transforms, selected_channels=args.selected_channels)
+        test_data = TUHDataset(test_data, transform=test_transforms, selected_channels=args.selected_channels)
 
     train_loader = DataLoader(dataset=train_data, batch_size=batch_size, shuffle=True, num_workers=6)
-    val_loader = DataLoader(dataset=val_data, batch_size=math.ceil(len(val_data) / 50), shuffle=False, num_workers=6)
-    test_loader = DataLoader(dataset=test_data, batch_size=math.ceil(len(test_data) / 50), shuffle=False, num_workers=6)
+    val_loader = DataLoader(dataset=val_data, batch_size=batch_size, shuffle=False, num_workers=6)
+    test_loader = DataLoader(dataset=test_data, batch_size=batch_size, shuffle=False, num_workers=6)
 
     return train_loader, val_loader, test_loader
 
