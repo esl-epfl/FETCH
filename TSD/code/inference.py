@@ -20,7 +20,7 @@ from einops import rearrange, repeat
 from einops.layers.torch import Rearrange
 from tuh_dataset import TUHDataset, get_data_loader
 from epilepsy_performance_metrics.src.timescoring.annotations import Annotation
-from epilepsy_performance_metrics.src.timescoring.annotations import Annotation
+from epilepsy_performance_metrics.src.timescoring.scoring import EventScoring
 import torch.multiprocessing
 torch.multiprocessing.set_sharing_strategy('file_system')
 from sklearn.metrics import precision_recall_curve, confusion_matrix
@@ -250,6 +250,19 @@ def test():
 
             test_prob = torch.squeeze(sigmoid(test_prob))
             test_prob_all = np.concatenate((test_prob_all, test_prob.cpu().numpy()))
+
+            print("Data shape", data.shape, test_prob.shape)
+
+            annotation_ref = Annotation(label, 1/12)
+            annotation_hyp = Annotation(test_prob.cpu().numpy(), 1/12)
+            param = EventScoring.Parameters(
+                toleranceStart=30,
+                toleranceEnd=60,
+                minOverlap=0,
+                maxEventDuration=5 * 60,
+                minDurationBetweenEvents=90)
+            scores = EventScoring(annotation_ref, annotation_hyp, param)
+            print(scores.sensitivity, scores.precision, scores.f1, scores.fpRate)
 
     test_predict_all = np.where(test_prob_all > best_th, 1, 0)
     print("Test confusion matrix: ", confusion_matrix(test_label_all, test_predict_all))

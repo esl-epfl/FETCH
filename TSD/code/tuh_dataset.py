@@ -209,9 +209,9 @@ def get_data_loader(batch_size, save_dir=args.save_directory):
     val_data = TUHDataset(val_data, transform=val_transforms, selected_channels=args.selected_channels)
     test_data = TUHDataset(test_data, transform=test_transforms, selected_channels=args.selected_channels)
 
-    train_loader = DataLoader(dataset=train_data, batch_size=batch_size, shuffle=True, num_workers=2)
-    val_loader = DataLoader(dataset=val_data, batch_size=math.ceil(len(val_data) / 50), shuffle=False, num_workers=2)
-    test_loader = DataLoader(dataset=test_data, batch_size=math.ceil(len(test_data) / 50), shuffle=False, num_workers=2)
+    train_loader = DataLoader(dataset=train_data, batch_size=batch_size, shuffle=True, num_workers=6)
+    val_loader = DataLoader(dataset=val_data, batch_size=math.ceil(len(val_data) / 50), shuffle=False, num_workers=6)
+    test_loader = DataLoader(dataset=test_data, batch_size=math.ceil(len(test_data) / 50), shuffle=False, num_workers=6)
 
     return train_loader, val_loader, test_loader
 
