@@ -232,7 +232,8 @@ def test():
         for data, label in tqdm(val_loader):
             data = torch.transpose(data, 0, 1)
             label = torch.transpose(label, 0, 1)
-            label = torch.squeeze(label, dim=(1, 2))
+            label = torch.squeeze(label, dim=1)
+            label = torch.squeeze(label, dim=1)
             val_label_all = np.concatenate((val_label_all, label.cpu().numpy()))
             val_prob = model(data.to(device))
             val_prob = torch.squeeze(sigmoid(val_prob), dim=1)
@@ -249,7 +250,8 @@ def test():
         for data, label in tqdm(test_loader):
             data = torch.transpose(data, 0, 1)
             label = torch.transpose(label, 0, 1)
-            label = torch.squeeze(label, dim=(1, 2))
+            label = torch.squeeze(label, dim=1)
+            label = torch.squeeze(label, dim=1)
             test_label_all = np.concatenate((test_label_all, label.cpu().numpy()))
             test_prob = model(data.to(device))
 
@@ -257,19 +259,21 @@ def test():
             test_prob_all = np.concatenate((test_prob_all, test_prob.cpu().numpy()))
 
             print("Data shape", data.shape, test_prob.shape)
+            test_predict = np.where(test_prob.cpu().numpy() > best_th, 1, 0)
 
-            for i in range(data.shape[0]):
-                annotation_ref = Annotation(label.cpu().numpy()[i], 1/12)
-                annotation_hyp = Annotation(test_prob[i].cpu().numpy(), 1/12)
-                param = EventScoring.Parameters(
-                    toleranceStart=30,
-                    toleranceEnd=60,
-                    minOverlap=0,
-                    maxEventDuration=5 * 60,
-                    minDurationBetweenEvents=90)
-                scores = EventScoring(annotation_ref, annotation_hyp, param)
-                print(scores.sensitivity, scores.precision, scores.f1, scores.fpRate)
-                print(scores.tp, scores.fp)
+            annotation_ref = Annotation(label.cpu().numpy(), 1/12)
+            print(annotation_ref.events)
+            print(annotation_ref.mask)
+            annotation_hyp = Annotation(test_predict, 1/12)
+            param = EventScoring.Parameters(
+                toleranceStart=30,
+                toleranceEnd=60,
+                minOverlap=0,
+                maxEventDuration=5 * 60,
+                minDurationBetweenEvents=90)
+            scores = EventScoring(annotation_ref, annotation_hyp, param)
+            print(scores.sensitivity, scores.precision, scores.f1, scores.fpRate)
+            print(scores.tp, scores.fp, scores.refTrue - scores.tp)
 
     test_predict_all = np.where(test_prob_all > best_th, 1, 0)
     print("Test confusion matrix: ", confusion_matrix(test_label_all, test_predict_all))
