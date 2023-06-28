@@ -221,10 +221,9 @@ def thresh_max_f1(y_true, y_prob):
     return best_thresh
 
 
-def test():
-    print(device)
+def test_event_base():
     save_directory = '/home/amirshah/EPFL/EpilepsyTransformer/TUSZv2/preprocess'
-    train_loader, val_loader, test_loader = get_data_loader(1, save_directory)
+    train_loader, val_loader, test_loader = get_data_loader(1, save_directory, event_base=True)
 
     val_label_all = np.zeros(0, dtype=np.int)
     val_prob_all = np.zeros(0, dtype=np.float)
@@ -287,17 +286,40 @@ def test():
     fp_rate = fp_total / (total_samples / scores.fs / 3600)  # FP per hour
     print("False Alarm Rate : ", fp_rate)
 
-    # def Find_Optimal_Cutoff(FPR, TPR, thresholds):
-    #     y = TPR - FPR
-    #     Youden_index = np.argmax(y)  # Only the first occurrence is returned.
-    #     optimal_threshold = thresholds[Youden_index]
-    #     point = [FPR[Youden_index], TPR[Youden_index]]
-    #     return optimal_threshold, point
-    #
-    # fpr, tpr, thresholds = metrics.roc_curve(test_label_all, test_prob_all)
-    # print(Find_Optimal_Cutoff(fpr, tpr, thresholds))
 
-  # roc_auc = metrics.auc(fpr, tpr)  # plt.figure(figsize=(6,6))  # plt.title('Validation ROC')  # plt.plot(fpr, tpr, 'b', label = 'Val AUC = %0.4f' % roc_auc)  # plt.legend(loc = 'lower right')  # plt.plot([0, 1], [0, 1],'r--')  # plt.xlim([0, 1])  # plt.ylim([0, 1])  # plt.ylabel('True Positive Rate')  # plt.xlabel('False Positive Rate')  # plt.show()
+def test_sample_base():
+    save_directory = '/home/amirshah/EPFL/EpilepsyTransformer/TUSZv2/preprocess'
+    train_loader, val_loader, test_loader = get_data_loader(save_directory, 32)
+
+    val_label_all = []
+    val_prob_all = np.zeros(0, dtype=np.float)
+    with torch.no_grad():
+        for data, label in tqdm(val_loader):
+            val_label_all.extend(label.cpu().numpy())
+            val_prob = model(data.to(device))
+
+            val_prob = torch.squeeze(sigmoid(val_prob))
+            val_prob_all = np.concatenate((val_prob_all, val_prob.cpu().numpy()))
+
+    print(set(val_label_all))
+    best_th = thresh_max_f1(val_label_all, val_prob_all)
+    print("Best threshold : ", best_th)
+
+    test_label_all = []
+    test_prob_all = np.zeros(0, dtype=np.float)
+
+    with torch.no_grad():
+        for data, label in tqdm(test_loader):
+            test_label_all.extend(label)
+            test_prob = model(data.to(device))
+
+            test_prob = torch.squeeze(sigmoid(test_prob))
+            test_prob_all = np.concatenate((test_prob_all, test_prob.cpu().numpy()))
+
+    test_predict_all = np.where(test_prob_all > best_th, 1, 0)
+    print("Test confusion matrix: ", confusion_matrix(test_label_all, test_predict_all))
+
+    print("AUROC result: ", roc_auc_score(test_label_all, test_prob_all))
 
 
 def get_data_loader_multi(save_directory, batch_size=1):
@@ -402,6 +424,6 @@ model = torch.load('/home/amirshah/EPFL/EpilepsyTransformer/TUSZv2/preprocess/te
 model.eval()
 sigmoid = nn.Sigmoid()
 
-test()
+test_event_base()
 # test_recall()
 # test_run()

@@ -27,7 +27,6 @@ parser.add_argument('--task_type', type=str, default='binary', choices=['binary'
 parser.add_argument('--slice_length', type=int, default=12)
 parser.add_argument('--eeg_type', type=str, default='stft', choices=['original', 'bipolar', 'stft'])
 parser.add_argument('--selected_channels', type=int, default=-1)
-parser.add_argument('--event_base', action='store_true', default=False, help='Set event_base to True')
 
 args = parser.parse_args()
 
@@ -206,7 +205,7 @@ def separate_and_sort_filenames(filenames):
     return sorted_lists
 
 
-def get_data_loader(batch_size, save_dir=args.save_directory):
+def get_data_loader(batch_size, save_dir=args.save_directory, event_base=False):
     file_dir = {'train': os.path.join(save_dir, 'task-binary_datatype-train'),
                 'val': os.path.join(save_dir, 'task-binary_datatype-eval'),
                 'test': os.path.join(save_dir, 'task-binary_datatype-dev')}
@@ -258,7 +257,7 @@ def get_data_loader(batch_size, save_dir=args.save_directory):
     )
 
     train_data = TUHDataset(train_data, transform=train_transforms, selected_channels=args.selected_channels)
-    if args.event_base:
+    if event_base:
         val_data = TUHDatasetEvent(separate_and_sort_filenames(val_data), transform=val_transforms)
         test_data = TUHDatasetEvent(separate_and_sort_filenames(test_data), transform=test_transforms)
     else:
