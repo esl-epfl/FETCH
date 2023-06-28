@@ -246,6 +246,9 @@ def test():
     test_label_all = np.zeros(0, dtype=np.int)
     test_prob_all = np.zeros(0, dtype=np.float)
 
+    tp_total, fp_total, fn_total = 0, 0, 0
+    total_samples = 0
+
     with torch.no_grad():
         for data, label in tqdm(test_loader):
             data = torch.transpose(data, 0, 1)
@@ -262,8 +265,6 @@ def test():
             test_predict = np.where(test_prob.cpu().numpy() > best_th, 1, 0)
 
             annotation_ref = Annotation(label.cpu().numpy(), 1/12)
-            print(annotation_ref.events)
-            print(annotation_ref.mask)
             annotation_hyp = Annotation(test_predict, 1/12)
             param = EventScoring.Parameters(
                 toleranceStart=30,
@@ -272,13 +273,20 @@ def test():
                 maxEventDuration=5 * 60,
                 minDurationBetweenEvents=90)
             scores = EventScoring(annotation_ref, annotation_hyp, param)
-            print(scores.sensitivity, scores.precision, scores.f1, scores.fpRate)
-            print(scores.tp, scores.fp, scores.refTrue - scores.tp)
+            tp_total += scores.tp
+            fp_total += scores.fp
+            fn_total += (scores.refTrue - scores.tp)
+            total_samples += scores.numSamples
 
-    test_predict_all = np.where(test_prob_all > best_th, 1, 0)
-    print("Test confusion matrix: ", confusion_matrix(test_label_all, test_predict_all))
+    print("Total true positive events: ", tp_total)
+    print("Total false positive events: ", fp_total)
+    print("Total false negative events: ", fn_total)
 
-    print("AUROC result: ", roc_auc_score(test_label_all, test_prob_all))
+    print("Sensitivity ", 100.0 * tp_total / (tp_total + fn_total))
+    print("Precision ", 100.0 * tp_total / (tp_total + fp_total))
+    fp_rate = fp_total / (total_samples / scores.fs / 3600)  # FP per hour
+    print("False Alarm Rate : ", fp_rate)
+
     # def Find_Optimal_Cutoff(FPR, TPR, thresholds):
     #     y = TPR - FPR
     #     Youden_index = np.argmax(y)  # Only the first occurrence is returned.
