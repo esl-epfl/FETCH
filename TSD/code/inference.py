@@ -226,30 +226,34 @@ def test():
     save_directory = '/home/amirshah/EPFL/EpilepsyTransformer/TUSZv2/preprocess'
     train_loader, val_loader, test_loader = get_data_loader(1, save_directory)
 
-    val_label_all = []
+    val_label_all = np.zeros(0, dtype=np.int)
     val_prob_all = np.zeros(0, dtype=np.float)
     with torch.no_grad():
         for data, label in tqdm(val_loader):
-            print("Data shape: ", data.shape)
-            val_label_all.extend(label.cpu().numpy())
+            data = torch.transpose(data, 0, 1)
+            label = torch.transpose(label, 0, 1)
+            label = torch.squeeze(label, dim=(1, 2))
+            val_label_all = np.concatenate((val_label_all, label.cpu().numpy()))
             val_prob = model(data.to(device))
-
-            val_prob = torch.squeeze(sigmoid(val_prob))
+            val_prob = torch.squeeze(sigmoid(val_prob), dim=1)
             val_prob_all = np.concatenate((val_prob_all, val_prob.cpu().numpy()))
 
     print(set(val_label_all))
     best_th = thresh_max_f1(val_label_all, val_prob_all)
     print("Best threshold : ", best_th)
 
-    test_label_all = []
+    test_label_all = np.zeros(0, dtype=np.int)
     test_prob_all = np.zeros(0, dtype=np.float)
 
     with torch.no_grad():
         for data, label in tqdm(test_loader):
-            test_label_all.extend(label)
+            data = torch.transpose(data, 0, 1)
+            label = torch.transpose(label, 0, 1)
+            label = torch.squeeze(label, dim=(1, 2))
+            test_label_all = np.concatenate((test_label_all, label.cpu().numpy()))
             test_prob = model(data.to(device))
 
-            test_prob = torch.squeeze(sigmoid(test_prob))
+            test_prob = torch.squeeze(sigmoid(test_prob), dim=1)
             test_prob_all = np.concatenate((test_prob_all, test_prob.cpu().numpy()))
 
             print("Data shape", data.shape, test_prob.shape)

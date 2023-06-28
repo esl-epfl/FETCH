@@ -185,7 +185,7 @@ class TUHDatasetEvent(Dataset):
                 label = data_pkl['label']
                 label = 0. if label == "bckg" else 1.
                 recording_labels.append(label)
-        return recording_signals, recording_labels
+        return np.vstack(recording_signals), np.vstack(recording_labels)
 
 
 def separate_and_sort_filenames(filenames):
