@@ -207,8 +207,8 @@ def separate_and_sort_filenames(filenames):
 
 def get_data_loader(batch_size, save_dir=args.save_directory, event_base=False):
     file_dir = {'train': os.path.join(save_dir, 'task-binary_datatype-train'),
-                'val': os.path.join(save_dir, 'task-binary_datatype-eval'),
-                'test': os.path.join(save_dir, 'task-binary_datatype-dev')}
+                'val': os.path.join(save_dir, 'task-binary_datatype-dev'),
+                'test': os.path.join(save_dir, 'task-binary_datatype-eval')}
     file_lists = {'train': {'bckg': [], 'seiz': []}, 'val': {'bckg': [], 'seiz': []}, 'test': {'bckg': [], 'seiz': []}}
 
     for dirname in file_dir.keys():

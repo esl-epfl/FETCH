@@ -260,7 +260,6 @@ def test_event_base():
             test_prob = torch.squeeze(sigmoid(test_prob), dim=1)
             test_prob_all = np.concatenate((test_prob_all, test_prob.cpu().numpy()))
 
-            print("Data shape", data.shape, test_prob.shape)
             test_predict = np.where(test_prob.cpu().numpy() > best_th, 1, 0)
 
             annotation_ref = Annotation(label.cpu().numpy(), 1/12)
@@ -289,7 +288,7 @@ def test_event_base():
 
 def test_sample_base():
     save_directory = '/home/amirshah/EPFL/EpilepsyTransformer/TUSZv2/preprocess'
-    train_loader, val_loader, test_loader = get_data_loader(save_directory, 32)
+    train_loader, val_loader, test_loader = get_data_loader(32, save_directory, event_base=False)
 
     val_label_all = []
     val_prob_all = np.zeros(0, dtype=np.float)

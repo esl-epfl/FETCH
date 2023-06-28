@@ -54,7 +54,7 @@ scheduler = StepLR(optimizer, step_size=1, gamma=gamma)
 train_loader, val_loader, test_loader = tuh_dataset.get_data_loader(batch_size)
 
 best_val_auc = 0.0
-model_directory = os.path.join(tuh_dataset.args.save_directory, 'test_v2')
+model_directory = os.path.join(tuh_dataset.args.save_directory, 'test_eval')
 # os.mkdir(model_directory)
 for epoch in range(epochs):
 
