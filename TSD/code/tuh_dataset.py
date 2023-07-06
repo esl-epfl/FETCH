@@ -13,6 +13,8 @@ from scipy.signal import filtfilt, butter
 from torch.utils.data import DataLoader, Dataset
 from torchvision.transforms import transforms
 from tqdm import tqdm
+import seaborn as sns
+import matplotlib.pyplot as plt
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--seed', type=int, default=999)
@@ -22,7 +24,7 @@ parser.add_argument('--save_directory', type=str,
                     default='/home/amirshah/EPFL/EpilepsyTransformer/TUSZv2/preprocess')
 parser.add_argument('--label_type', type=str, default='csv_bi')
 parser.add_argument('--cpu_num', type=int, default=32)
-parser.add_argument('--data_type', type=str, default='eval', choices=['train', 'eval', 'dev'])
+parser.add_argument('--data_type', type=str, default='dev', choices=['train', 'eval', 'dev'])
 parser.add_argument('--task_type', type=str, default='binary', choices=['binary'])
 parser.add_argument('--slice_length', type=int, default=12)
 parser.add_argument('--eeg_type', type=str, default='stft', choices=['original', 'bipolar', 'stft'])
@@ -140,14 +142,8 @@ class TUHDataset(Dataset):
     def __getitem__(self, idx):
         with open(self.file_list[idx], 'rb') as f:
             data_pkl = pickle.load(f)
-            signals = np.asarray(data_pkl['signals'])
-            if signals.shape != (20, 3072):
-                print("Error in shape: ", signals.shape)
-
-            if args.eeg_type == 'stft':
-                f, t, signals = spectrogram_unfold_feature(signals)
-                # print(signals.shape)
-                # exit()
+            signals = np.asarray(data_pkl['STFT'])
+            signals = np.reshape(signals, (-1, signals.shape[2]))
 
             signals = self.transform(signals)
             label = data_pkl['label']
@@ -206,9 +202,9 @@ def separate_and_sort_filenames(filenames):
 
 
 def get_data_loader(batch_size, save_dir=args.save_directory, event_base=False):
-    file_dir = {'train': os.path.join(save_dir, 'task-binary_datatype-train'),
-                'val': os.path.join(save_dir, 'task-binary_datatype-dev'),
-                'test': os.path.join(save_dir, 'task-binary_datatype-eval')}
+    file_dir = {'train': os.path.join(save_dir, 'task-binary_datatype-train_STFT'),
+                'val': os.path.join(save_dir, 'task-binary_datatype-dev_STFT'),
+                'test': os.path.join(save_dir, 'task-binary_datatype-eval_STFT')}
     file_lists = {'train': {'bckg': [], 'seiz': []}, 'val': {'bckg': [], 'seiz': []}, 'test': {'bckg': [], 'seiz': []}}
 
     for dirname in file_dir.keys():
@@ -416,6 +412,33 @@ def generate_lead_wise_data(edf_file):
                          'label': disease_labels[label]}, f)
 
 
+def generate_STFT(pickle_file):
+    save_directory = "{}/task-{}_datatype-{}_STFT".format(args.save_directory, args.task_type, args.data_type)
+
+    nperseg = 256
+    noverlap = 64
+    sampling_rate = 256
+    freq_resolution = 2
+    nfft = sampling_rate * freq_resolution
+    cutoff_freq = 80
+
+    with open(pickle_file, 'rb') as f:
+        data_pkl = pickle.load(f)
+        signals = np.asarray(data_pkl['signals'])
+        if signals.shape != (20, 3072):
+            print("Error in shape: ", signals.shape)
+
+        freqs, times, spec = stft(signals, fs=sampling_rate, nperseg=nperseg, noverlap=noverlap, nfft=nfft,
+                                  boundary=None, padded=False)
+
+        spec = spec[:, :cutoff_freq*freq_resolution, :]
+        amp = (np.log(np.abs(spec) + 1e-10)).astype(np.float32)
+
+        label = data_pkl['label']
+        with open("{}/{}.pkl".format(save_directory, pickle_file.split('/')[-1].split('.')[0]), 'wb') as out_f:
+            pickle.dump({'STFT': amp, 'label': label}, out_f)
+
+
 def run_multi_process(f, l: list, n_processes=1):
     n_processes = min(n_processes, len(l))
     print('processes num: {}'.format(n_processes))
@@ -468,5 +491,22 @@ def main(args):
     run_multi_process(generate_lead_wise_data, edf_list, n_processes=6)
 
 
+def make_STFT(args):
+    save_directory = "{}/task-{}_datatype-{}_STFT".format(args.save_directory, args.task_type, args.data_type)
+    if os.path.isdir(save_directory):
+        os.system("rm -r {}".format(save_directory))
+    os.system("mkdir -p {}".format(save_directory))
+
+    data_directory = "{}/task-{}_datatype-{}".format(args.save_directory, args.task_type, args.data_type)
+    pickle_list = []
+    for pickle_file in os.listdir(data_directory):
+        if pickle_file.endswith(".pkl"):
+            pickle_list.append(os.path.join(data_directory, pickle_file))
+
+    run_multi_process(generate_STFT, pickle_list, n_processes=6)
+    # for pickle_file in tqdm(pickle_list[:2]):
+    #     generate_STFT(pickle_file)
+
+
 if __name__ == '__main__':
-    main(args)
+    make_STFT(args)

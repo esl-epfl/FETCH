@@ -418,11 +418,12 @@ device = 'cuda:0'
 # device = 'cpu'
 
 # model = torch.load('inference_ck_0.9208', map_location=torch.device(device))
-model = torch.load('/home/amirshah/EPFL/EpilepsyTransformer/TUSZv2/preprocess/test_v2/test_model_0.9374276011157442',
+model = torch.load('/home/amirshah/EPFL/EpilepsyTransformer/TUSZv2/preprocess/test_STFT/test_model_22_0.9296276365344943',
                    map_location=torch.device(device))
+print(sum(p.numel() for p in model.parameters() if p.requires_grad))
 model.eval()
 sigmoid = nn.Sigmoid()
 
-test_event_base()
+test_sample_base()
 # test_recall()
 # test_run()

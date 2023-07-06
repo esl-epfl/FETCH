@@ -13,6 +13,8 @@ from tqdm import tqdm
 
 import tuh_dataset
 from vit_pytorch.vit import ViT
+import torch.multiprocessing
+torch.multiprocessing.set_sharing_strategy('file_system')
 
 print(f"Torch: {torch.__version__}")
 print("Channels selected for this trainin\nGroup number: {}\nChannels: {} ".format(tuh_dataset.args.selected_channels,
@@ -33,12 +35,12 @@ def seed_everything(seed=99):
 seed_everything()
 
 device = 'cuda'
-model = ViT(image_size=(5120, 15), patch_size=(64, 5), num_classes=1, dim=16, depth=4, heads=4, mlp_dim=4, pool='cls',
+model = ViT(image_size=(3200, 15), patch_size=(64, 5), num_classes=1, dim=16, depth=4, heads=4, mlp_dim=4, pool='cls',
             channels=1, dim_head=4, dropout=0.2, emb_dropout=0.2).to(device)
 sigmoid = nn.Sigmoid()
 
 # Training settings
-batch_size = 1024
+batch_size = 256
 epochs = 60
 lr = 3e-5
 gamma = 0.7
@@ -54,8 +56,8 @@ scheduler = StepLR(optimizer, step_size=1, gamma=gamma)
 train_loader, val_loader, test_loader = tuh_dataset.get_data_loader(batch_size)
 
 best_val_auc = 0.0
-model_directory = os.path.join(tuh_dataset.args.save_directory, 'test_eval')
-# os.mkdir(model_directory)
+model_directory = os.path.join(tuh_dataset.args.save_directory, 'test_STFT')
+os.mkdir(model_directory)
 for epoch in range(epochs):
 
     model.train()
