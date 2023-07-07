@@ -27,7 +27,7 @@ parser.add_argument('--save_directory', type=str,
                     default='/home/amirshah/EPFL/EpilepsyTransformer/TUSZv2/preprocess')
 parser.add_argument('--label_type', type=str, default='csv_bi')
 parser.add_argument('--cpu_num', type=int, default=32)
-parser.add_argument('--data_type', type=str, default='dev', choices=['train', 'eval', 'dev'])
+parser.add_argument('--data_type', type=str, default='eval', choices=['train', 'eval', 'dev'])
 parser.add_argument('--task_type', type=str, default='binary', choices=['binary'])
 parser.add_argument('--slice_length', type=int, default=12)
 parser.add_argument('--eeg_type', type=str, default='stft', choices=['original', 'bipolar', 'stft'])
@@ -154,8 +154,37 @@ class TUHDataset(Dataset):
             # Randomly shuffle the indices
             indices = indices[np.random.permutation(20)]
 
-            # Select the first 19 indices and assign 0 to the corresponding MASK elements
-            MASK[indices[:19]] = 0
+            # Select the first 8 indices and assign 0 to the corresponding MASK elements
+            MASK[indices[:8]] = 0
+
+            signals[MASK] = -1  # Set all elements corresponding to True in MASK to -1
+
+            signals = np.reshape(signals, (-1, signals.shape[2]))
+            signals = self.transform(signals)
+
+            label = data_pkl['label']
+            label = 0. if label == "bckg" else 1.
+        return signals, label
+
+
+class TUHDatasetValidation(Dataset):
+    def __init__(self, file_list, transform=None):
+        self.file_list = file_list
+        self.file_length = len(self.file_list)
+        self.transform = transform
+        with open('../../TUSZv2/validation_file_mask8_dict.pkl', 'rb') as f:
+            self.file_mask_dict = pickle.load(f)
+
+    def __len__(self):
+        return self.file_length
+
+    def __getitem__(self, idx):
+        with open(self.file_list[idx], 'rb') as f:
+            data_pkl = pickle.load(f)
+            signals = np.asarray(data_pkl['STFT'])
+
+            filename = self.file_list[idx].split('/')[-1]
+            MASK = self.file_mask_dict[filename]
 
             signals[MASK] = -1  # Set all elements corresponding to True in MASK to -1
 
@@ -273,7 +302,7 @@ def get_data_loader(batch_size, save_dir=args.save_directory, event_base=False):
         val_data = TUHDatasetEvent(separate_and_sort_filenames(val_data), transform=val_transforms)
         test_data = TUHDatasetEvent(separate_and_sort_filenames(test_data), transform=test_transforms)
     else:
-        val_data = TUHDataset(val_data, transform=val_transforms, selected_channels=args.selected_channels)
+        val_data = TUHDatasetValidation(val_data, transform=val_transforms)
         test_data = TUHDataset(test_data, transform=test_transforms, selected_channels=args.selected_channels)
 
     train_loader = DataLoader(dataset=train_data, batch_size=batch_size, shuffle=True, num_workers=6)
@@ -519,10 +548,26 @@ def make_STFT(args):
         if pickle_file.endswith(".pkl"):
             pickle_list.append(os.path.join(data_directory, pickle_file))
 
+
+
     run_multi_process(generate_STFT, pickle_list, n_processes=6)
     # for pickle_file in tqdm(pickle_list[:1]):
     #     generate_STFT(pickle_file)
 
 
+def save_validation_inference():
+    batch_size = 100
+    _, val_loader, test_loader = get_data_loader(batch_size)
+    validation_file_mask_dict = {}
+    for idx, (data, label, file, mask) in enumerate(tqdm(val_loader, desc='Validation ')):
+        file_mask_dict = dict(zip(file, mask))
+        validation_file_mask_dict.update(file_mask_dict)
+
+    # Save 'dict' to a file
+    with open('validation_file_mask8_dict.pkl', 'wb') as f:
+        pickle.dump(validation_file_mask_dict, f)
+
+
 if __name__ == '__main__':
-    make_STFT(args)
+    # make_STFT(args)
+    pass

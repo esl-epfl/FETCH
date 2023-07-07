@@ -21,6 +21,11 @@ print("Channels selected for this trainin\nGroup number: {}\nChannels: {} ".form
                                                                                    tuh_dataset.channels_groups
                                                                                    [tuh_dataset.args.selected_channels]))
 
+PATIENCE_EARLY_STOPPING = 4
+VAL_EVERY = 2
+EPOCHS = 400
+GENERAL_MODEL = True
+
 
 def seed_everything(seed=99):
     random.seed(seed)
@@ -35,7 +40,7 @@ def seed_everything(seed=99):
 seed_everything()
 
 device = 'cuda'
-model = ViT(image_size=(3200, 15), patch_size=(64, 5), num_classes=1, dim=16, depth=4, heads=4, mlp_dim=4, pool='cls',
+model = ViT(image_size=(3200, 15), patch_size=(80, 5), num_classes=1, dim=16, depth=4, heads=4, mlp_dim=4, pool='cls',
             channels=1, dim_head=4, dropout=0.2, emb_dropout=0.2).to(device)
 sigmoid = nn.Sigmoid()
 
@@ -56,8 +61,11 @@ scheduler = StepLR(optimizer, step_size=1, gamma=gamma)
 train_loader, val_loader, test_loader = tuh_dataset.get_data_loader(batch_size)
 
 best_val_auc = 0.0
-model_directory = os.path.join(tuh_dataset.args.save_directory, 'test_STFT')
-os.mkdir(model_directory)
+best_val_epoch = 0
+model_directory = os.path.join(tuh_dataset.args.save_directory, 'test_STFT8')
+if not os.path.exists(model_directory):
+    os.mkdir(model_directory)
+
 for epoch in range(epochs):
 
     model.train()
@@ -83,6 +91,9 @@ for epoch in range(epochs):
         epoch_train_loss += loss / len(train_loader)
 
     train_auc = roc_auc_score(train_label_all, train_prob_all)
+
+    if epoch % VAL_EVERY != VAL_EVERY-1:
+        continue
 
     model.eval()
     val_label_all = []
@@ -110,27 +121,31 @@ for epoch in range(epochs):
 
     if best_val_auc < val_auc:
         best_val_auc = val_auc
+        best_val_epoch = epoch
+        torch.save(model, os.path.join(model_directory, 'model_{}_{}'.format(epoch, val_auc)))
 
-        model.eval()
-        test_label_all = []
-        test_prob_all = []
-        epoch_test_loss = 0
-        with torch.no_grad():
-            for data, label in tqdm(test_loader, desc='Testing '):
-                test_label_all.extend(label)
+        if not GENERAL_MODEL:
+            model.eval()
+            test_label_all = []
+            test_prob_all = []
+            epoch_test_loss = 0
+            with torch.no_grad():
+                for data, label in tqdm(test_loader, desc='Testing '):
+                    test_label_all.extend(label)
 
-                data = data.to(device)
-                label = label.to(device).float()
+                    data = data.to(device)
+                    label = label.to(device).float()
 
-                test_prob = model(data)
-                test_prob = torch.squeeze(sigmoid(test_prob))
-                test_prob_all.extend(test_prob.cpu().numpy())
+                    test_prob = model(data)
+                    test_prob = torch.squeeze(sigmoid(test_prob))
+                    test_prob_all.extend(test_prob.cpu().numpy())
 
-                test_loss = criterion(test_prob, label)
+                    test_loss = criterion(test_prob, label)
 
-                epoch_test_loss += test_loss / len(test_loader)
+                    epoch_test_loss += test_loss / len(test_loader)
 
-        test_auc = roc_auc_score(test_label_all, test_prob_all)
-        print(f"test_loss: {epoch_test_loss:.4f} - test_auc: {test_auc:.4f}")
+            test_auc = roc_auc_score(test_label_all, test_prob_all)
+            print(f"test_loss: {epoch_test_loss:.4f} - test_auc: {test_auc:.4f}")
 
-        torch.save(model, os.path.join(model_directory, 'test_model_{}_{}'.format(epoch, test_auc)))
+    if epoch > best_val_epoch + PATIENCE_EARLY_STOPPING:
+        torch.save(model, os.path.join(model_directory, 'test_model_last_{}'.format(epoch)))
