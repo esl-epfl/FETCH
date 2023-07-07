@@ -31,7 +31,7 @@ parser.add_argument('--data_type', type=str, default='eval', choices=['train', '
 parser.add_argument('--task_type', type=str, default='binary', choices=['binary'])
 parser.add_argument('--slice_length', type=int, default=12)
 parser.add_argument('--eeg_type', type=str, default='stft', choices=['original', 'bipolar', 'stft'])
-parser.add_argument('--selected_channels', type=int, default=-1)
+parser.add_argument('--selected_channels', type=int, default=3)
 
 args = parser.parse_args()
 
@@ -151,11 +151,15 @@ class TUHDataset(Dataset):
             # Create a list of indices
             indices = np.arange(20)
 
-            # Randomly shuffle the indices
-            indices = indices[np.random.permutation(20)]
+            if self.selected_channels == -1:  # if the mask is not pre-assigned
+                # Randomly shuffle the indices
+                indices = indices[np.random.permutation(20)]
 
-            # Select the first 8 indices and assign 0 to the corresponding MASK elements
-            MASK[indices[:8]] = 0
+                # Select the first 8 indices and assign 0 to the corresponding MASK elements
+                MASK[indices[:8]] = 0
+            else:
+                present_channels = channels_groups[self.selected_channels]
+                MASK[present_channels] = 0
 
             signals[MASK] = -1  # Set all elements corresponding to True in MASK to -1
 
@@ -246,7 +250,7 @@ def separate_and_sort_filenames(filenames):
     return sorted_lists
 
 
-def get_data_loader(batch_size, save_dir=args.save_directory, event_base=False):
+def get_data_loader(batch_size, save_dir=args.save_directory, event_base=False, random_mask=False):
     file_dir = {'train': os.path.join(save_dir, 'task-binary_datatype-train_STFT'),
                 'val': os.path.join(save_dir, 'task-binary_datatype-dev_STFT'),
                 'test': os.path.join(save_dir, 'task-binary_datatype-eval_STFT')}
@@ -297,12 +301,17 @@ def get_data_loader(batch_size, save_dir=args.save_directory, event_base=False):
         ]
     )
 
-    train_data = TUHDataset(train_data, transform=train_transforms, selected_channels=args.selected_channels)
-    if event_base:
-        val_data = TUHDatasetEvent(separate_and_sort_filenames(val_data), transform=val_transforms)
-        test_data = TUHDatasetEvent(separate_and_sort_filenames(test_data), transform=test_transforms)
+    if random_mask:
+        train_data = TUHDataset(train_data, transform=train_transforms)
+        if event_base:
+            val_data = TUHDatasetEvent(separate_and_sort_filenames(val_data), transform=val_transforms)
+            test_data = TUHDatasetEvent(separate_and_sort_filenames(test_data), transform=test_transforms)
+        else:
+            val_data = TUHDatasetValidation(val_data, transform=val_transforms)
+            test_data = TUHDataset(test_data, transform=test_transforms)
     else:
-        val_data = TUHDatasetValidation(val_data, transform=val_transforms)
+        train_data = TUHDataset(train_data, transform=train_transforms, selected_channels=args.selected_channels)
+        val_data = TUHDataset(val_data, transform=val_transforms, selected_channels=args.selected_channels)
         test_data = TUHDataset(test_data, transform=test_transforms, selected_channels=args.selected_channels)
 
     train_loader = DataLoader(dataset=train_data, batch_size=batch_size, shuffle=True, num_workers=6)

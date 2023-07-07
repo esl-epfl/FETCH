@@ -24,7 +24,7 @@ print("Channels selected for this trainin\nGroup number: {}\nChannels: {} ".form
 PATIENCE_EARLY_STOPPING = 4
 VAL_EVERY = 2
 EPOCHS = 400
-GENERAL_MODEL = True
+GENERAL_MODEL = False
 
 
 def seed_everything(seed=99):
@@ -45,8 +45,7 @@ model = ViT(image_size=(3200, 15), patch_size=(80, 5), num_classes=1, dim=16, de
 sigmoid = nn.Sigmoid()
 
 # Training settings
-batch_size = 256
-epochs = 60
+batch_size = 64
 lr = 3e-5
 gamma = 0.7
 tuh_dataset.args.eeg_type = 'stft'
@@ -62,11 +61,11 @@ train_loader, val_loader, test_loader = tuh_dataset.get_data_loader(batch_size)
 
 best_val_auc = 0.0
 best_val_epoch = 0
-model_directory = os.path.join(tuh_dataset.args.save_directory, 'test_STFT8')
+model_directory = os.path.join(tuh_dataset.args.save_directory, 'test_8ch_{}'.format(tuh_dataset.args.selected_channels))
 if not os.path.exists(model_directory):
     os.mkdir(model_directory)
 
-for epoch in range(epochs):
+for epoch in range(EPOCHS):
 
     model.train()
     train_label_all = []
@@ -149,3 +148,4 @@ for epoch in range(epochs):
 
     if epoch > best_val_epoch + PATIENCE_EARLY_STOPPING:
         torch.save(model, os.path.join(model_directory, 'test_model_last_{}'.format(epoch)))
+        break
