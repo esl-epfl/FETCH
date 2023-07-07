@@ -15,6 +15,9 @@ from torchvision.transforms import transforms
 from tqdm import tqdm
 import seaborn as sns
 import matplotlib.pyplot as plt
+import torch
+
+torch.random.manual_seed(42)  # optional: for reproducibility
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--seed', type=int, default=999)
@@ -143,9 +146,22 @@ class TUHDataset(Dataset):
         with open(self.file_list[idx], 'rb') as f:
             data_pkl = pickle.load(f)
             signals = np.asarray(data_pkl['STFT'])
-            signals = np.reshape(signals, (-1, signals.shape[2]))
 
+            MASK = np.ones(20, dtype=np.bool)
+            # Create a list of indices
+            indices = np.arange(20)
+
+            # Randomly shuffle the indices
+            indices = indices[np.random.permutation(20)]
+
+            # Select the first 19 indices and assign 0 to the corresponding MASK elements
+            MASK[indices[:19]] = 0
+
+            signals[MASK] = -1  # Set all elements corresponding to True in MASK to -1
+
+            signals = np.reshape(signals, (-1, signals.shape[2]))
             signals = self.transform(signals)
+
             label = data_pkl['label']
             label = 0. if label == "bckg" else 1.
         return signals, label
@@ -504,7 +520,7 @@ def make_STFT(args):
             pickle_list.append(os.path.join(data_directory, pickle_file))
 
     run_multi_process(generate_STFT, pickle_list, n_processes=6)
-    # for pickle_file in tqdm(pickle_list[:2]):
+    # for pickle_file in tqdm(pickle_list[:1]):
     #     generate_STFT(pickle_file)
 
 
