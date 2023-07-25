@@ -23,7 +23,7 @@ def get_parser():
     parser.add_argument('-nep', '--epochs',
                         type=int,
                         help='number of epochs to train for',
-                        default=100)
+                        default=500)
 
     parser.add_argument('-lr', '--learning_rate',
                         type=float,
@@ -43,7 +43,7 @@ def get_parser():
     parser.add_argument('-its', '--iterations',
                         type=int,
                         help='number of episodes per epoch, default=100',
-                        default=100)
+                        default=200)
 
     parser.add_argument('-cTr', '--classes_per_it_tr',
                         type=int,
@@ -81,7 +81,7 @@ def get_parser():
                         default=7)
 
     parser.add_argument('--cuda',
-                        action='store_true',
+                        action='store_false',
                         help='enables cuda')
 
     return parser

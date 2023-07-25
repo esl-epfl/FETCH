@@ -43,11 +43,11 @@ def init_dataloader(opt):
     tr_dataset, val_dataset, test_dataset, tr_label, val_label, test_label = ret
 
     tr_sampler = init_sampler(opt, tr_label, mode="train")
-    tr_dataloader = torch.utils.data.DataLoader(tr_dataset, batch_sampler=tr_sampler)
+    tr_dataloader = torch.utils.data.DataLoader(tr_dataset, batch_sampler=tr_sampler, num_workers=6)
     val_sampler = init_sampler(opt, val_label, mode="val")
-    val_dataloader = torch.utils.data.DataLoader(val_dataset, batch_sampler=val_sampler)
+    val_dataloader = torch.utils.data.DataLoader(val_dataset, batch_sampler=val_sampler, num_workers=6)
     test_sampler = init_sampler(opt, test_label, mode="test")
-    test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_sampler=test_sampler)
+    test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_sampler=test_sampler, num_workers=6)
 
     return tr_dataloader, val_dataloader, test_dataloader
 
@@ -206,24 +206,24 @@ def test(opt, test_dataloader, model):
     return avg_acc
 
 
-# def eval(opt):
-#     '''
-#     Initialize everything and train
-#     '''
-#     options = get_parser().parse_args()
-#
-#     if torch.cuda.is_available() and not options.cuda:
-#         print("WARNING: You have a CUDA device, so you should probably run with --cuda")
-#
-#     init_seed(options)
-#     test_dataloader = init_dataset(options)[-1]
-#     model = init_protonet(options)
-#     model_path = os.path.join(opt.experiment_root, 'best_model.pth')
-#     model.load_state_dict(torch.load(model_path))
-#
-#     test(opt=options,
-#          test_dataloader=test_dataloader,
-#          model=model)
+def eval():
+    """
+    Initialize everything and train
+    """
+    options = get_parser().parse_args()
+
+    if torch.cuda.is_available() and not options.cuda:
+        print("WARNING: You have a CUDA device, so you should probably run with --cuda")
+
+    init_seed(options)
+    _, _, test_dataloader = init_dataloader(options)
+    model = init_vit(options)
+    model_path = os.path.join(options.experiment_root, 'best_model.pth')
+    model.load_state_dict(torch.load(model_path))
+
+    test(opt=options,
+         test_dataloader=test_dataloader,
+         model=model)
 
 
 def main():
@@ -264,4 +264,5 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    # main()
+    eval()
