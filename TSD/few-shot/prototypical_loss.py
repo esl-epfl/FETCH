@@ -103,7 +103,7 @@ def get_prototypes(input, target):
     return prototypes
 
 
-def prototypical_evaluation(prototypes, inputs, target):
+def prototypical_evaluation(prototypes, inputs):
     """
     Inspired by https://github.com/jakesnell/prototypical-networks/blob/master/protonets/models/few_shot.py
 
@@ -119,28 +119,12 @@ def prototypical_evaluation(prototypes, inputs, target):
     - n_support: number of samples to keep in account when computing
       barycentres, for each one of the current classes
     """
-    target_cpu = target.to('cpu')
-
-    # FIXME when torch.unique will be available on cuda too
-    classes = torch.unique(target_cpu)
-    n_classes = len(classes)
-    # FIXME when torch will support where as np
-    n_query = target_cpu.eq(classes[0].item()).sum().item()
-
     query_samples = inputs.to('cpu')
     dists = euclidean_dist(query_samples, prototypes)
-
-    log_p_y = F.log_softmax(-dists, dim=1).view(n_classes, n_query, -1)
-
-    target_inds = torch.arange(0, n_classes)
-    target_inds = target_inds.view(n_classes, 1, 1)
-    target_inds = target_inds.expand(n_classes, n_query, 1).long()
-
-    loss_val = -log_p_y.gather(2, target_inds).squeeze().view(-1).mean()
-    _, y_hat = log_p_y.max(2)
-    acc_val = y_hat.eq(target_inds.squeeze(2)).float().mean()
-
-    return acc_val
+    log_p_y = F.softmax(-dists)
+    y_hat = log_p_y.argmax(dim=1)
+    y_prob = torch.max(log_p_y, dim=1)[0]
+    return y_prob, y_hat
 
 
 

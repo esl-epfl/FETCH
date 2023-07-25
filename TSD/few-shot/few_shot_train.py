@@ -7,6 +7,7 @@ from prototypical_loss import get_prototypes, prototypical_evaluation
 from parser_util import get_parser
 from TSD.code.tuh_dataset import get_data_loader
 from TSD.code.tuh_dataset import channels_groups
+from sklearn.metrics import roc_auc_score, confusion_matrix
 
 from tqdm import tqdm
 import numpy as np
@@ -48,7 +49,7 @@ def init_dataloader(opt):
     tr_dataloader = torch.utils.data.DataLoader(tr_dataset, batch_sampler=tr_sampler, num_workers=6)
     val_sampler = init_sampler(opt, val_label, mode="val")
     val_dataloader = torch.utils.data.DataLoader(val_dataset, batch_sampler=val_sampler, num_workers=6)
-    test_dataloader = torch.utils.data.DataLoader(test_dataset, num_workers=6)
+    test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size=1024, num_workers=6)
 
     return tr_dataloader, val_dataloader, test_dataloader
 
@@ -203,8 +204,10 @@ def test(opt, train_dataloader, test_dataloader, model):
 
     prototypes = get_prototypes(model_output, target=y)
 
-    test_iter = iter(test_dataloader)
-    for batch in tqdm(test_iter):
+    predict = []
+    predict_prob = []
+    true_label = []
+    for batch in tqdm(test_dataloader):
         x, y = batch
         x, y = x.to(device), y.to(device)
 
@@ -212,10 +215,17 @@ def test(opt, train_dataloader, test_dataloader, model):
         x[:, mask, :, :] = -1  # mask the channels
         x = x.reshape((x.shape[0], 1, -1, x.shape[3]))
         model_output = model(x)
-        _, acc = prototypical_evaluation(prototypes, model_output, target=y)
-        avg_acc.append(acc.item())
-    avg_acc = np.mean(avg_acc)
-    print('Test Acc: {}'.format(avg_acc))
+        prob, output = prototypical_evaluation(prototypes, model_output)
+        predict.append(output.detach().cpu().numpy())
+        predict_prob.append(prob.detach().cpu().numpy())
+        true_label.append(y.detach().cpu().numpy())
+    predict = np.hstack(predict)
+    predict_prob = np.hstack(predict_prob)
+    true_label = np.hstack(true_label)
+    print(predict.shape)
+    print("Test confusion matrix: ", confusion_matrix(true_label, predict))
+
+    print("AUROC result: ", roc_auc_score(true_label, predict_prob))
 
     return avg_acc
 
