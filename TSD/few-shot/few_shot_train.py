@@ -3,8 +3,10 @@ import matplotlib.pyplot as plt
 
 from prototypical_batch_sampler import PrototypicalBatchSampler
 from prototypical_loss import prototypical_loss as loss_fn
+from prototypical_loss import get_prototypes, prototypical_evaluation
 from parser_util import get_parser
 from TSD.code.tuh_dataset import get_data_loader
+from TSD.code.tuh_dataset import channels_groups
 
 from tqdm import tqdm
 import numpy as np
@@ -46,8 +48,7 @@ def init_dataloader(opt):
     tr_dataloader = torch.utils.data.DataLoader(tr_dataset, batch_sampler=tr_sampler, num_workers=6)
     val_sampler = init_sampler(opt, val_label, mode="val")
     val_dataloader = torch.utils.data.DataLoader(val_dataset, batch_sampler=val_sampler, num_workers=6)
-    test_sampler = init_sampler(opt, test_label, mode="test")
-    test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_sampler=test_sampler, num_workers=6)
+    test_dataloader = torch.utils.data.DataLoader(test_dataset, num_workers=6)
 
     return tr_dataloader, val_dataloader, test_dataloader
 
@@ -86,17 +87,20 @@ def save_list_to_file(path, thelist):
             f.write("%s\n" % item)
 
 
-def get_mask():
+def get_mask(selected_channels=-1):
     MASK = np.ones(20, dtype=np.bool)
 
-    # Create a list of indices
-    indices = np.arange(20)
+    if selected_channels == -1:
+        # Create a list of indices
+        indices = np.arange(20)
+        # Randomly shuffle the indices
+        indices = indices[np.random.permutation(20)]
 
-    # Randomly shuffle the indices
-    indices = indices[np.random.permutation(20)]
-
-    # Select the first 8 indices and assign 0 to the corresponding MASK elements
-    MASK[indices[:8]] = 0
+        # Select the first 8 indices and assign 0 to the corresponding MASK elements
+        MASK[indices[:8]] = 0
+    else:
+        present_channels = channels_groups[selected_channels]
+        MASK[present_channels] = 0
 
     return MASK
 
@@ -180,26 +184,36 @@ def train(opt, tr_dataloader, model, optim, lr_scheduler, val_dataloader=None):
     return best_state, best_acc, train_loss, train_acc, val_loss, val_acc
 
 
-def test(opt, test_dataloader, model):
+def test(opt, train_dataloader, test_dataloader, model):
     """
     Test the model trained with the prototypical learning algorithm
     """
     device = 'cuda:0' if torch.cuda.is_available() and opt.cuda else 'cpu'
     avg_acc = list()
-    for epoch in range(10):
-        test_iter = iter(test_dataloader)
-        for batch in test_iter:
-            x, y = batch
-            x, y = x.to(device), y.to(device)
 
-            mask = get_mask()
-            x[:, mask, :, :] = -1  # mask the channels
-            x = x.reshape((x.shape[0], 1, -1, x.shape[3]))
+    tr_iter = iter(train_dataloader)
+    model.eval()
+    x, y = next(tr_iter)
+    x, y = x.to(device), y.to(device)
 
-            model_output = model(x)
-            _, acc = loss_fn(model_output, target=y,
-                             n_support=opt.num_support_val)
-            avg_acc.append(acc.item())
+    mask = get_mask(selected_channels=2)
+    x[:, mask, :, :] = -1  # mask the channels
+    x = x.reshape((x.shape[0], 1, -1, x.shape[3]))
+    model_output = model(x)
+
+    prototypes = get_prototypes(model_output, target=y)
+
+    test_iter = iter(test_dataloader)
+    for batch in tqdm(test_iter):
+        x, y = batch
+        x, y = x.to(device), y.to(device)
+
+        mask = get_mask(selected_channels=2)
+        x[:, mask, :, :] = -1  # mask the channels
+        x = x.reshape((x.shape[0], 1, -1, x.shape[3]))
+        model_output = model(x)
+        _, acc = prototypical_evaluation(prototypes, model_output, target=y)
+        avg_acc.append(acc.item())
     avg_acc = np.mean(avg_acc)
     print('Test Acc: {}'.format(avg_acc))
 
@@ -216,12 +230,13 @@ def eval():
         print("WARNING: You have a CUDA device, so you should probably run with --cuda")
 
     init_seed(options)
-    _, _, test_dataloader = init_dataloader(options)
+    tr_dataloader, _, test_dataloader = init_dataloader(options)
     model = init_vit(options)
     model_path = os.path.join(options.experiment_root, 'best_model.pth')
     model.load_state_dict(torch.load(model_path))
 
     test(opt=options,
+         train_dataloader= tr_dataloader,
          test_dataloader=test_dataloader,
          model=model)
 
