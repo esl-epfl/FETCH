@@ -86,6 +86,21 @@ def save_list_to_file(path, thelist):
             f.write("%s\n" % item)
 
 
+def get_mask():
+    MASK = np.ones(20, dtype=np.bool)
+
+    # Create a list of indices
+    indices = np.arange(20)
+
+    # Randomly shuffle the indices
+    indices = indices[np.random.permutation(20)]
+
+    # Select the first 8 indices and assign 0 to the corresponding MASK elements
+    MASK[indices[:8]] = 0
+
+    return MASK
+
+
 def train(opt, tr_dataloader, model, optim, lr_scheduler, val_dataloader=None):
     '''
     Train the model with the prototypical learning algorithm
@@ -112,6 +127,11 @@ def train(opt, tr_dataloader, model, optim, lr_scheduler, val_dataloader=None):
             optim.zero_grad()
             x, y = batch
             x, y = x.to(device), y.to(device)
+
+            mask = get_mask()
+            x[:, mask, :, :] = -1  # mask the channels
+            x = x.reshape((x.shape[0], 1, -1, x.shape[3]))
+
             model_output = model(x)
             loss, acc = loss_fn(model_output, target=y,
                                 n_support=opt.num_support_tr)
@@ -130,6 +150,11 @@ def train(opt, tr_dataloader, model, optim, lr_scheduler, val_dataloader=None):
         for batch in val_iter:
             x, y = batch
             x, y = x.to(device), y.to(device)
+
+            mask = get_mask()
+            x[:, mask, :, :] = -1  # mask the channels
+            x = x.reshape((x.shape[0], 1, -1, x.shape[3]))
+
             model_output = model(x)
             loss, acc = loss_fn(model_output, target=y,
                                 n_support=opt.num_support_val)
@@ -156,9 +181,9 @@ def train(opt, tr_dataloader, model, optim, lr_scheduler, val_dataloader=None):
 
 
 def test(opt, test_dataloader, model):
-    '''
+    """
     Test the model trained with the prototypical learning algorithm
-    '''
+    """
     device = 'cuda:0' if torch.cuda.is_available() and opt.cuda else 'cpu'
     avg_acc = list()
     for epoch in range(10):
@@ -166,6 +191,11 @@ def test(opt, test_dataloader, model):
         for batch in test_iter:
             x, y = batch
             x, y = x.to(device), y.to(device)
+
+            mask = get_mask()
+            x[:, mask, :, :] = -1  # mask the channels
+            x = x.reshape((x.shape[0], 1, -1, x.shape[3]))
+
             model_output = model(x)
             _, acc = loss_fn(model_output, target=y,
                              n_support=opt.num_support_val)

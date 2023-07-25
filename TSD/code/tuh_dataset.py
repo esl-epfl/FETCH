@@ -165,8 +165,8 @@ class TUHDataset(Dataset):
 
                 signals[MASK] = -1  # Set all elements corresponding to True in MASK to -1
 
-            signals = np.reshape(signals, (-1, signals.shape[2]))
-            signals = self.transform(signals)
+                signals = np.reshape(signals, (-1, signals.shape[2]))
+                signals = self.transform(signals)
 
             label = data_pkl['label']
             label = 0. if label == "bckg" else 1.
