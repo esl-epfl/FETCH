@@ -31,7 +31,7 @@ parser.add_argument('--data_type', type=str, default='eval', choices=['train', '
 parser.add_argument('--task_type', type=str, default='binary', choices=['binary'])
 parser.add_argument('--slice_length', type=int, default=12)
 parser.add_argument('--eeg_type', type=str, default='stft', choices=['original', 'bipolar', 'stft'])
-parser.add_argument('--selected_channels', type=int, default=3)
+parser.add_argument('--selected_channels', type=int, default=0)
 
 args = parser.parse_args()
 
@@ -250,7 +250,7 @@ def separate_and_sort_filenames(filenames):
     return sorted_lists
 
 
-def get_data_loader(batch_size, save_dir=args.save_directory, event_base=False, random_mask=False):
+def get_data_loader(batch_size, save_dir=args.save_directory, event_base=False, random_mask=False, return_dataset=False):
     file_dir = {'train': os.path.join(save_dir, 'task-binary_datatype-train_STFT'),
                 'val': os.path.join(save_dir, 'task-binary_datatype-dev_STFT'),
                 'test': os.path.join(save_dir, 'task-binary_datatype-eval_STFT')}
@@ -275,11 +275,20 @@ def get_data_loader(batch_size, save_dir=args.save_directory, event_base=False, 
 
     train_data = file_lists['train']['bckg'] + file_lists['train']['seiz'] * \
                  int(len(file_lists['train']['bckg']) / len(file_lists['train']['seiz']))
-    shuffle(train_data)
+    non_seizure_labels = np.zeros(len(file_lists['train']['bckg']))
+    seizure_labels = np.ones(len(file_lists['train']['seiz']) *
+                             int(len(file_lists['train']['bckg']) / len(file_lists['train']['seiz'])))
+    train_label = np.concatenate((non_seizure_labels, seizure_labels))
     print('len(train_data): {}'.format(len(train_data)))
 
     val_data = file_lists['val']['bckg'] + file_lists['val']['seiz']
     test_data = file_lists['test']['bckg'] + file_lists['test']['seiz']
+
+    val_label = np.concatenate((np.zeros(len(file_lists['val']['bckg'])),
+                                np.ones(len(file_lists['val']['seiz']))))
+    test_label = np.concatenate((np.zeros(len(file_lists['test']['bckg'])),
+                                 np.ones(len(file_lists['test']['seiz']))))
+
     print('len(val_data): {}'.format(len(val_data)))
     print('len(test_data): {}'.format(len(test_data)))
 
@@ -314,11 +323,15 @@ def get_data_loader(batch_size, save_dir=args.save_directory, event_base=False, 
         val_data = TUHDataset(val_data, transform=val_transforms, selected_channels=args.selected_channels)
         test_data = TUHDataset(test_data, transform=test_transforms, selected_channels=args.selected_channels)
 
-    train_loader = DataLoader(dataset=train_data, batch_size=batch_size, shuffle=True, num_workers=6)
-    val_loader = DataLoader(dataset=val_data, batch_size=batch_size, shuffle=False, num_workers=6)
-    test_loader = DataLoader(dataset=test_data, batch_size=batch_size, shuffle=False, num_workers=6)
+    if return_dataset:
+        return train_data, val_data, test_data, train_label, val_label, test_label
 
-    return train_loader, val_loader, test_loader
+    else:
+        train_loader = DataLoader(dataset=train_data, batch_size=batch_size, shuffle=True, num_workers=6)
+        val_loader = DataLoader(dataset=val_data, batch_size=batch_size, shuffle=False, num_workers=6)
+        test_loader = DataLoader(dataset=test_data, batch_size=batch_size, shuffle=False, num_workers=6)
+
+        return train_loader, val_loader, test_loader
 
 
 def _get_sample_frequency(signal_header):
