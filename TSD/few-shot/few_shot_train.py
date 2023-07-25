@@ -39,7 +39,7 @@ def init_sampler(opt, labels, mode):
 
 def init_dataloader(opt):
     ret = get_data_loader(batch_size=2*(opt.num_support_tr + opt.num_query_tr), save_dir=opt.data_root,
-                          return_dataset=True)
+                          return_dataset=True, masking=False)
     tr_dataset, val_dataset, test_dataset, tr_label, val_label, test_label = ret
 
     tr_sampler = init_sampler(opt, tr_label, mode="train")
@@ -57,7 +57,7 @@ def init_vit(opt):
     Initialize the ViT
     """
     device = 'cuda:0' if torch.cuda.is_available() and opt.cuda else 'cpu'
-    model = ViT(image_size=(3200, 15), patch_size=(80, 5), num_classes=1, dim=16, depth=4, heads=4, mlp_dim=4,
+    model = ViT(image_size=(3200, 15), patch_size=(80, 5), num_classes=16, dim=16, depth=4, heads=4, mlp_dim=4,
                 pool='cls',
                 channels=1, dim_head=4, dropout=0.2, emb_dropout=0.2).to(device)
     return model
@@ -111,12 +111,6 @@ def train(opt, tr_dataloader, model, optim, lr_scheduler, val_dataloader=None):
         for batch in tqdm(tr_iter):
             optim.zero_grad()
             x, y = batch
-            print("X", x.shape)
-            print("y", y)
-            plt.figure(figsize=(10, 10))
-            plt.imshow(x[0, 0, :, :], interpolation='nearest', aspect='auto')
-            plt.show()
-            input()
             x, y = x.to(device), y.to(device)
             model_output = model(x)
             loss, acc = loss_fn(model_output, target=y,

@@ -133,11 +133,12 @@ def spectrogram_unfold_feature(signals):
 
 
 class TUHDataset(Dataset):
-    def __init__(self, file_list, transform=None, selected_channels=None):
+    def __init__(self, file_list, transform=None, selected_channels=None, masking=True):
         self.file_list = file_list
         self.file_length = len(self.file_list)
         self.transform = transform
         self.selected_channels = selected_channels
+        self.masking = masking
 
     def __len__(self):
         return self.file_length
@@ -147,21 +148,22 @@ class TUHDataset(Dataset):
             data_pkl = pickle.load(f)
             signals = np.asarray(data_pkl['STFT'])
 
-            MASK = np.ones(20, dtype=np.bool)
-            # Create a list of indices
-            indices = np.arange(20)
+            if self.masking:
+                MASK = np.ones(20, dtype=np.bool)
+                # Create a list of indices
+                indices = np.arange(20)
 
-            if self.selected_channels == -1:  # if the mask is not pre-assigned
-                # Randomly shuffle the indices
-                indices = indices[np.random.permutation(20)]
+                if self.selected_channels == -1:  # if the mask is not pre-assigned
+                    # Randomly shuffle the indices
+                    indices = indices[np.random.permutation(20)]
 
-                # Select the first 8 indices and assign 0 to the corresponding MASK elements
-                MASK[indices[:8]] = 0
-            else:
-                present_channels = channels_groups[self.selected_channels]
-                MASK[present_channels] = 0
+                    # Select the first 8 indices and assign 0 to the corresponding MASK elements
+                    MASK[indices[:8]] = 0
+                else:
+                    present_channels = channels_groups[self.selected_channels]
+                    MASK[present_channels] = 0
 
-            signals[MASK] = -1  # Set all elements corresponding to True in MASK to -1
+                signals[MASK] = -1  # Set all elements corresponding to True in MASK to -1
 
             signals = np.reshape(signals, (-1, signals.shape[2]))
             signals = self.transform(signals)
@@ -250,7 +252,8 @@ def separate_and_sort_filenames(filenames):
     return sorted_lists
 
 
-def get_data_loader(batch_size, save_dir=args.save_directory, event_base=False, random_mask=False, return_dataset=False):
+def get_data_loader(batch_size, save_dir=args.save_directory, event_base=False, random_mask=False,
+                    return_dataset=False, masking=True):
     file_dir = {'train': os.path.join(save_dir, 'task-binary_datatype-train_STFT'),
                 'val': os.path.join(save_dir, 'task-binary_datatype-dev_STFT'),
                 'test': os.path.join(save_dir, 'task-binary_datatype-eval_STFT')}
@@ -311,7 +314,7 @@ def get_data_loader(batch_size, save_dir=args.save_directory, event_base=False, 
     )
 
     if random_mask:
-        train_data = TUHDataset(train_data, transform=train_transforms)
+        train_data = TUHDataset(train_data, transform=train_transforms, masking=masking)
         if event_base:
             val_data = TUHDatasetEvent(separate_and_sort_filenames(val_data), transform=val_transforms)
             test_data = TUHDatasetEvent(separate_and_sort_filenames(test_data), transform=test_transforms)
@@ -319,9 +322,12 @@ def get_data_loader(batch_size, save_dir=args.save_directory, event_base=False, 
             val_data = TUHDatasetValidation(val_data, transform=val_transforms)
             test_data = TUHDataset(test_data, transform=test_transforms)
     else:
-        train_data = TUHDataset(train_data, transform=train_transforms, selected_channels=args.selected_channels)
-        val_data = TUHDataset(val_data, transform=val_transforms, selected_channels=args.selected_channels)
-        test_data = TUHDataset(test_data, transform=test_transforms, selected_channels=args.selected_channels)
+        train_data = TUHDataset(train_data, transform=train_transforms, selected_channels=args.selected_channels,
+                                masking=masking)
+        val_data = TUHDataset(val_data, transform=val_transforms, selected_channels=args.selected_channels,
+                              masking=masking)
+        test_data = TUHDataset(test_data, transform=test_transforms, selected_channels=args.selected_channels,
+                               masking=masking)
 
     if return_dataset:
         return train_data, val_data, test_data, train_label, val_label, test_label
