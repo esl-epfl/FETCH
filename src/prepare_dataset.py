@@ -34,11 +34,11 @@ def bandpower(f, Pxx, fmin, fmax):
     return scipy.integrate.trapz(Pxx[ind_min: ind_max + 1], f[ind_min: ind_max + 1])
 
 
-def calculateOtherMLfeatures_oneCh(X, fs):
+def calculateOtherMLfeatures_oneCh(X, fs, t_len, step_len):
     numFeat = 5  # 4 from Sopic2018 and LL and meanAmpl
     lenSig = len(X)
-    segLenIndx = int(4 * fs)  # length of EEG segments in samples
-    slidWindStepIndx = int(1 * fs)  # step of slidin window to extract segments in samples
+    segLenIndx = int(t_len * fs)  # length of EEG segments in samples
+    slidWindStepIndx = int(step_len * fs)  # step of slidin window to extract segments in samples
     index = np.arange(0, lenSig - segLenIndx + slidWindStepIndx, slidWindStepIndx).astype(int)
 
     featureValues = np.zeros((len(index), numFeat))
