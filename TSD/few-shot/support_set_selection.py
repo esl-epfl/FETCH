@@ -13,6 +13,8 @@ from functools import partial
 from sklearn.ensemble import RandomForestClassifier
 import joblib
 
+from sklearn.metrics import roc_auc_score, confusion_matrix, precision_recall_curve
+
 
 def get_features(signals):
     """
@@ -181,6 +183,56 @@ def train_random_forest():
     print(f"Model saved to: {model_path}")
 
 
+def thresh_max_f1(y_true, y_prob):
+    """
+    Find best threshold based on precision-recall curve to maximize F1-score.
+    Binary calssification only
+    """
+    if len(set(y_true)) > 2:
+        raise NotImplementedError
+
+    precision, recall, thresholds = precision_recall_curve(y_true, y_prob)
+    thresh_filt = []
+    fscore = []
+    n_thresh = len(thresholds)
+    for idx in range(n_thresh):
+        curr_f1 = (2 * precision[idx] * recall[idx]) / \
+            (precision[idx] + recall[idx])
+        if not (np.isnan(curr_f1)):
+            fscore.append(curr_f1)
+            thresh_filt.append(thresholds[idx])
+    # locate the index of the largest f score
+    ix = np.argmax(np.array(fscore))
+    best_thresh = thresh_filt[ix]
+    return best_thresh
+
+
+def inference_random_forest():
+    # Load the saved model for future inferences
+    model_path = './rf_model.pkl'
+    loaded_model = joblib.load(model_path)
+
+    dev_folder = "../../TUSZv2/preprocess/task-binary_datatype-dev_features"
+    dev_features, y_dev = load_features_from_folder(dev_folder)
+    predicted_probabilities = loaded_model.predict_proba(dev_features)
+    threshold = thresh_max_f1(y_dev, predicted_probabilities[:, 1])
+    print("Best threshold ", threshold)
+
+    # Now you can use the loaded_model to make predictions on new data
+    test_folder = "../../TUSZv2/preprocess/task-binary_datatype-eval_features"
+    test_features, y_test = load_features_from_folder(test_folder)
+    predicted_probabilities = loaded_model.predict_proba(test_features)
+    auc_score = roc_auc_score(y_test, predicted_probabilities[:, 1])
+    print(f"AUC Score: {auc_score:.4f}")
+
+    # Calculate the confusion matrix
+    predicted_classes = (predicted_probabilities[:, 1] > threshold).astype(int)
+
+    conf_matrix = confusion_matrix(y_test, predicted_classes)
+    print("Confusion Matrix:")
+    print(conf_matrix)
+
+
 if __name__ == '__main__':
     # process_files()
-    train_random_forest()
+    inference_random_forest()
