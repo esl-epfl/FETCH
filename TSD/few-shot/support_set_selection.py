@@ -14,6 +14,8 @@ from sklearn.ensemble import RandomForestClassifier
 import joblib
 
 from sklearn.metrics import roc_auc_score, confusion_matrix, precision_recall_curve
+from sklearn_extra.cluster import KMedoids
+from sklearn.preprocessing import StandardScaler
 
 
 def get_features(signals):
@@ -130,6 +132,7 @@ def process_files():
 def load_features_from_folder(folder_path):
     features = []
     labels = []
+    filenames = []
     if not os.path.exists(folder_path):
         print(f"Directory '{folder_path}' does not exist.")
         return
@@ -147,19 +150,20 @@ def load_features_from_folder(folder_path):
             else:
                 label = 0
             labels.append(label)
+            filenames.append(filename.split("_features.pkl")[0])
 
-    return np.array(features), np.array(labels)
+    return np.array(features), np.array(labels), np.array(filenames)
 
 
 def train_random_forest():
     train_folder = "../../TUSZv2/preprocess/task-binary_datatype-train_features"
-    train_features, y_train = load_features_from_folder(train_folder)
+    train_features, y_train, _ = load_features_from_folder(train_folder)
     print("Train data extracted!")
     dev_folder = "../../TUSZv2/preprocess/task-binary_datatype-dev_features"
-    dev_features, y_dev = load_features_from_folder(dev_folder)
+    dev_features, y_dev, _ = load_features_from_folder(dev_folder)
     print("Dev data extracted!")
     test_folder = "../../TUSZv2/preprocess/task-binary_datatype-eval_features"
-    test_features, y_test = load_features_from_folder(test_folder)
+    test_features, y_test, _ = load_features_from_folder(test_folder)
     print("Eval data extracted!")
 
     # Create a Random Forest Classifier with desired parameters
@@ -213,14 +217,14 @@ def inference_random_forest():
     loaded_model = joblib.load(model_path)
 
     dev_folder = "../../TUSZv2/preprocess/task-binary_datatype-dev_features"
-    dev_features, y_dev = load_features_from_folder(dev_folder)
+    dev_features, y_dev, _ = load_features_from_folder(dev_folder)
     predicted_probabilities = loaded_model.predict_proba(dev_features)
     threshold = thresh_max_f1(y_dev, predicted_probabilities[:, 1])
     print("Best threshold ", threshold)
 
     # Now you can use the loaded_model to make predictions on new data
     test_folder = "../../TUSZv2/preprocess/task-binary_datatype-eval_features"
-    test_features, y_test = load_features_from_folder(test_folder)
+    test_features, y_test, _ = load_features_from_folder(test_folder)
     predicted_probabilities = loaded_model.predict_proba(test_features)
     auc_score = roc_auc_score(y_test, predicted_probabilities[:, 1])
     print(f"AUC Score: {auc_score:.4f}")
@@ -233,6 +237,69 @@ def inference_random_forest():
     print(conf_matrix)
 
 
+def apply_kmedoids_to_class(class_features, class_label, n_clusters):
+    # Apply K-Medoids clustering to obtain n_clusters centroids for the class
+    kmedoids = KMedoids(n_clusters=n_clusters, random_state=42)
+    kmedoids.fit(class_features)
+    centroids_indices = kmedoids.medoid_indices_
+
+    # Get the cluster assignments for each data point
+    cluster_assignments = kmedoids.predict(class_features)
+
+    # Count the number of samples in each cluster
+    samples_in_clusters = {}
+    for cluster in range(n_clusters):
+        samples_in_cluster = np.sum(cluster_assignments == cluster)
+        samples_in_clusters[cluster] = samples_in_cluster
+
+    print("Samples in class {}: {}".format(class_label, samples_in_clusters))
+
+    return centroids_indices
+
+
+def k_mean_clusters():
+    train_folder = "../../TUSZv2/preprocess/task-binary_datatype-train_features"
+    train_features, labels, filenames = load_features_from_folder(train_folder)
+    train_features = train_features.astype(np.float32)
+
+    # Create a StandardScaler object
+    scaler = StandardScaler()
+
+    # Fit the StandardScaler on the train_features to compute the mean and standard deviation
+    scaler.fit(train_features)
+
+    # Transform the train_features to have zero mean and unit variance
+    standardized_train_features = scaler.transform(train_features)
+
+    print("Features Mean STD", standardized_train_features.mean(axis=0),  standardized_train_features.std(axis=0))
+    print("Train data extracted!", standardized_train_features.shape)
+    input()
+    # Number of clusters (n_clusters) for each class
+    n_clusters = 25
+
+    # Apply K-Medoids clustering to class 0 (label 0)
+    class_indices = (labels == 0)
+    class_features = train_features[class_indices]
+    class_0_centroids = apply_kmedoids_to_class(class_features, class_label=0, n_clusters=n_clusters)
+    filenames_0_centroids = filenames[class_indices][class_0_centroids]
+
+    # Apply K-Medoids clustering to class 1 (label 1)
+    class_indices = (labels == 1)
+    class_features = train_features[class_indices]
+    class_1_centroids = apply_kmedoids_to_class(class_features, class_label=1, n_clusters=n_clusters)
+    filenames_1_centroids = filenames[class_indices][class_1_centroids]
+
+    # class_0_centroids and class_1_centroids will each have n_clusters centroids (shape: (n_clusters, 140))
+    # These centroids represent the cluster centers for each class after K-Medoids clustering.
+
+    # Example of accessing the centroids for class 0:
+    print("Centroids for Class 0:")
+    print(filenames_0_centroids)
+
+    # Example of accessing the centroids for class 1:
+    print("Centroids for Class 1:")
+    print(filenames_1_centroids)
+
+
 if __name__ == '__main__':
-    # process_files()
-    inference_random_forest()
+    k_mean_clusters()

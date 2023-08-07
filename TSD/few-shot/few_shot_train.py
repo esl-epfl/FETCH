@@ -7,6 +7,7 @@ from prototypical_loss import get_prototypes, prototypical_evaluation
 from parser_util import get_parser
 from TSD.code.tuh_dataset import get_data_loader
 from TSD.code.tuh_dataset import channels_groups
+from support_set_const import seizure_support_set, non_seizure_support_set
 from sklearn.metrics import roc_auc_score, confusion_matrix
 
 from tqdm import tqdm
@@ -14,6 +15,7 @@ import numpy as np
 import torch
 import os
 from vit_pytorch.vit import ViT
+import pickle
 
 
 def init_seed(opt):
@@ -29,10 +31,10 @@ def init_seed(opt):
 def init_sampler(opt, labels, mode):
     if 'train' in mode:
         classes_per_it = opt.classes_per_it_tr
-        num_samples = opt.num_support_tr + opt.num_query_tr
+        num_samples = opt.num_query_tr
     else:
         classes_per_it = opt.classes_per_it_val
-        num_samples = opt.num_support_val + opt.num_query_val
+        num_samples = opt.num_query_val
 
     return PrototypicalBatchSampler(labels=labels,
                                     classes_per_it=classes_per_it,
@@ -106,6 +108,22 @@ def get_mask(selected_channels=-1):
     return MASK
 
 
+def get_support_set():
+    support_set = []
+    labels = []
+    for label, class_support_set in enumerate([non_seizure_support_set, seizure_support_set]):
+        for filename in class_support_set:
+            filepath = os.path.join("../../TUSZv2/preprocess/task-binary_datatype-train_STFT/",
+                                filename + ".pkl")
+            with open(filepath, 'rb') as f:
+                data_pkl = pickle.load(f)
+                signals = np.asarray(data_pkl['STFT'])
+                support_set.append(signals)
+                labels.append(label)
+
+    return np.array(support_set), np.array(labels)
+
+
 def train(opt, tr_dataloader, model, optim, lr_scheduler, val_dataloader=None):
     '''
     Train the model with the prototypical learning algorithm
@@ -124,14 +142,21 @@ def train(opt, tr_dataloader, model, optim, lr_scheduler, val_dataloader=None):
     best_model_path = os.path.join(opt.experiment_root, 'best_model.pth')
     last_model_path = os.path.join(opt.experiment_root, 'last_model.pth')
 
+    x_support_set, y_support_set = get_support_set()
+    x_support_set = torch.tensor(x_support_set).to(device)
+    y_support_set = torch.tensor(y_support_set).to(device)
+
     for epoch in range(opt.epochs):
         print('=== Epoch: {} ==='.format(epoch))
         tr_iter = iter(tr_dataloader)
         model.train()
         for batch in tqdm(tr_iter):
             optim.zero_grad()
-            x, y = batch
-            x, y = x.to(device), y.to(device)
+            x_query_set, y_query_set = batch
+            x_query_set, y_query_set = x_query_set.to(device), y_query_set.to(device)
+
+            x = torch.concatenate((x_support_set, x_query_set))
+            y = torch.concatenate((y_support_set, y_query_set))
 
             mask = get_mask()
             x[:, mask, :, :] = -1  # mask the channels
@@ -153,8 +178,11 @@ def train(opt, tr_dataloader, model, optim, lr_scheduler, val_dataloader=None):
         val_iter = iter(val_dataloader)
         model.eval()
         for batch in val_iter:
-            x, y = batch
-            x, y = x.to(device), y.to(device)
+            x_query_set, y_query_set = batch
+            x_query_set, y_query_set = x_query_set.to(device), y_query_set.to(device)
+
+            x = torch.concatenate((x_support_set, x_query_set))
+            y = torch.concatenate((y_support_set, y_query_set))
 
             mask = get_mask()
             x[:, mask, :, :] = -1  # mask the channels
@@ -185,24 +213,25 @@ def train(opt, tr_dataloader, model, optim, lr_scheduler, val_dataloader=None):
     return best_state, best_acc, train_loss, train_acc, val_loss, val_acc
 
 
-def test(opt, train_dataloader, test_dataloader, model):
+def test(opt, test_dataloader, model):
     """
     Test the model trained with the prototypical learning algorithm
     """
     device = 'cuda:0' if torch.cuda.is_available() and opt.cuda else 'cpu'
     avg_acc = list()
 
-    tr_iter = iter(train_dataloader)
     model.eval()
-    x, y = next(tr_iter)
-    x, y = x.to(device), y.to(device)
+
+    x_support_set, y_support_set = get_support_set()
+    x_support_set = torch.tensor(x_support_set).to(device)
+    y_support_set = torch.tensor(y_support_set).to(device)
 
     mask = get_mask(selected_channels=2)
-    x[:, mask, :, :] = -1  # mask the channels
-    x = x.reshape((x.shape[0], 1, -1, x.shape[3]))
+    x_support_set[:, mask, :, :] = -1  # mask the channels
+    x = x_support_set.reshape((x_support_set.shape[0], 1, -1, x_support_set.shape[3]))
     model_output = model(x)
 
-    prototypes = get_prototypes(model_output, target=y)
+    prototypes = get_prototypes(model_output, target=y_support_set)
 
     predict = []
     predict_prob = []
@@ -246,7 +275,6 @@ def eval():
     model.load_state_dict(torch.load(model_path))
 
     test(opt=options,
-         train_dataloader= tr_dataloader,
          test_dataloader=test_dataloader,
          model=model)
 
@@ -289,5 +317,5 @@ def main():
 
 
 if __name__ == '__main__':
-    # main()
-    eval()
+    main()
+    # eval()
