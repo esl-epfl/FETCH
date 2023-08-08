@@ -1,3 +1,4 @@
+import json
 import os
 import argparse
 import pickle
@@ -31,24 +32,26 @@ parser.add_argument('--data_type', type=str, default='eval', choices=['train', '
 parser.add_argument('--task_type', type=str, default='binary', choices=['binary'])
 parser.add_argument('--slice_length', type=int, default=12)
 parser.add_argument('--eeg_type', type=str, default='stft', choices=['original', 'bipolar', 'stft'])
-parser.add_argument('--selected_channels', type=int, default=0)
+parser.add_argument('--selected_channel_id', type=int, default=-1)
+parser.add_argument('--global_model', action='store_true', help='enables global model')
 
 args = parser.parse_args()
 
 GLOBAL_INFO = {}
 
-channels_groups = [
-    [0, 1, 2, 3, 4, 5, 6, 7],
-    [0, 2, 4, 6, 12, 14, 16, 18],
-    [1, 3, 5, 7, 13, 15, 17, 19],
-    [0, 1, 12, 13, 14, 15, 10, 11],
-    [6, 7, 10, 11, 16, 17, 18, 19],
-    [0, 1, 4, 5, 14, 15, 18, 19],
-    [0, 1, 2, 3, 12, 13, 14, 15],
-    [1, 3, 4, 7, 8, 12, 13, 14], # RANDOM
-    [0, 2, 3, 5, 14, 16, 17, 19], # RANDOM
-    [0, 3, 4, 6, 7, 9, 17, 19], # RANDOM
-]
+# channels_groups = [
+#     [0, 1, 2, 3, 4, 5, 6, 7],
+#     [0, 2, 4, 6, 12, 14, 16, 18],
+#     [1, 3, 5, 7, 13, 15, 17, 19],
+#     [0, 1, 12, 13, 14, 15, 10, 11],
+#     [6, 7, 10, 11, 16, 17, 18, 19],
+#     [0, 1, 4, 5, 14, 15, 18, 19],
+#     [0, 1, 2, 3, 12, 13, 14, 15],
+#     [1, 3, 4, 7, 8, 12, 13, 14], # RANDOM
+#     [0, 2, 3, 5, 14, 16, 17, 19], # RANDOM
+#     [0, 3, 4, 6, 7, 9, 17, 19], # RANDOM
+# ]
+
 TUSZv2_info_df = pd.read_json('../../input/TUSZv2_info.json')
 
 
@@ -67,56 +70,6 @@ def search_walk(info):
     return searched_list
 
 
-def bipolar_signals_func(signals, selected_channels=None):
-    """
-    The function accepts a list of signals as input and returns a list of 20 bipolar signals, where 8 randomly selected
-     elements are computed from the input signals, and the remaining 12 elements are NumPy zeros with the same shape as
-      the input signals. The order of the original bipolar signals is preserved, ensuring that the position of the
-       non-zero elements in the output list corresponds to their position in the original bipolar signals computation.
-
-    Args:
-        a list of input signals
-
-    Returns:
-        the computed bipolar signals list with randomly selected elements and the remaining elements as zeros,
-        while maintaining the order of the original bipolar signals.
-
-    """
-    all_bipolar_signals = [
-        signals[0] - signals[4],   # fp1-f7
-        signals[1] - signals[5],   # fp2-f8
-        signals[4] - signals[9],   # f7-t3
-        signals[5] - signals[10],  # f8-t4
-        signals[9] - signals[15],  # t3-t5
-        signals[10] - signals[16], # t4-t6
-        signals[15] - signals[13], # t5-o1
-        signals[16] - signals[14], # t6-o2
-        signals[9] - signals[6],   # t3-c3
-        signals[7] - signals[10],  # c4-t4
-        signals[6] - signals[8],   # c3-cz
-        signals[8] - signals[7],   # cz-c4
-        signals[0] - signals[2],   # fp1-f3
-        signals[1] - signals[3],   # fp2-f4
-        signals[2] - signals[6],   # f3-c3
-        signals[3] - signals[7],   # f4-c4
-        signals[6] - signals[11],  # c3-p3
-        signals[7] - signals[12],  # c4-p4
-        signals[11] - signals[13], # p3-o1
-        signals[12] - signals[14]  # p4-o2
-    ]
-
-    if selected_channels is None or selected_channels == -1:
-        indices = list(range(len(all_bipolar_signals)))
-        random.shuffle(indices)
-        selected_indices = set(indices[:8])
-    else:
-        selected_indices = channels_groups[selected_channels]
-    bipolar_signals = [all_bipolar_signals[i] if i in selected_indices else
-                       np.zeros_like(signals[0]) for i in range(len(all_bipolar_signals))]
-
-    return bipolar_signals
-
-
 def spectrogram_unfold_feature(signals):
     nperseg = 250
     noverlap = 50
@@ -133,12 +86,20 @@ def spectrogram_unfold_feature(signals):
 
 
 class TUHDataset(Dataset):
-    def __init__(self, file_list, transform=None, selected_channels=None, masking=True):
+    def __init__(self, file_list, transform=None, selected_channel_id=-1, masking=True):
         self.file_list = file_list
         self.file_length = len(self.file_list)
         self.transform = transform
-        self.selected_channels = selected_channels
         self.masking = masking
+        with open("../feasible_channels/feasible_8edges.json", 'r') as json_file:
+            self.all_feasible_channel_combination = json.load(json_file)
+        if selected_channel_id == -1:
+            self.selected_channels = None
+        else:
+            self.selected_channels = self.all_feasible_channel_combination[selected_channel_id]
+
+        print("Selected channels: ", self.selected_channels)
+
 
     def __len__(self):
         return self.file_length
@@ -153,14 +114,15 @@ class TUHDataset(Dataset):
                 # Create a list of indices
                 indices = np.arange(20)
 
-                if self.selected_channels == -1:  # if the mask is not pre-assigned
+                if self.selected_channels == None:  # if the mask is not pre-assigned
                     # Randomly shuffle the indices
+                    # TODO: get random permutation from the all_feasible_channel_combination
                     indices = indices[np.random.permutation(20)]
 
                     # Select the first 8 indices and assign 0 to the corresponding MASK elements
                     MASK[indices[:8]] = 0
                 else:
-                    present_channels = channels_groups[self.selected_channels]
+                    present_channels = self.selected_channels
                     MASK[present_channels] = 0
 
                 signals[MASK] = -1  # Set all elements corresponding to True in MASK to -1
@@ -322,11 +284,12 @@ def get_data_loader(batch_size, save_dir=args.save_directory, event_base=False, 
             val_data = TUHDatasetValidation(val_data, transform=val_transforms)
             test_data = TUHDataset(test_data, transform=test_transforms)
     else:
-        train_data = TUHDataset(train_data, transform=train_transforms, selected_channels=args.selected_channels,
+        # TODO: set selected channels based on json and the args.selected_channel_id
+        train_data = TUHDataset(train_data, transform=train_transforms, selected_channel_id=args.selected_channel_id,
                                 masking=masking)
-        val_data = TUHDataset(val_data, transform=val_transforms, selected_channels=args.selected_channels,
+        val_data = TUHDataset(val_data, transform=val_transforms, selected_channel_id=args.selected_channel_id,
                               masking=masking)
-        test_data = TUHDataset(test_data, transform=test_transforms, selected_channels=args.selected_channels,
+        test_data = TUHDataset(test_data, transform=test_transforms, selected_channel_id=args.selected_channel_id,
                                masking=masking)
 
     if return_dataset:
@@ -575,8 +538,6 @@ def make_STFT(args):
     for pickle_file in os.listdir(data_directory):
         if pickle_file.endswith(".pkl"):
             pickle_list.append(os.path.join(data_directory, pickle_file))
-
-
 
     run_multi_process(generate_STFT, pickle_list, n_processes=6)
     # for pickle_file in tqdm(pickle_list[:1]):

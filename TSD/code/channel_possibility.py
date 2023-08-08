@@ -4,7 +4,7 @@ from tqdm import tqdm
 import json
 
 
-ones_count = 9
+ones_count = 8
 
 channels = [("FP1", "F7"),
             ("F7", "T3"),
@@ -71,7 +71,7 @@ all_edge_weights = generate_edge_weights()
 all_feasible_edge_weights = []
 for edge_weight_list in tqdm(all_edge_weights):
     if check_feasibility([channels[i] for i, x in enumerate(edge_weight_list) if x==1], edge_weight_list):
-        all_feasible_edge_weights.append(edge_weight_list)
+        all_feasible_edge_weights.append([i for i, x in enumerate(edge_weight_list) if x==1])
 
 
 # Save the list as a JSON file

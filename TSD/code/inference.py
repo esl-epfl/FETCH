@@ -24,8 +24,7 @@ from epilepsy_performance_metrics.src.timescoring.scoring import EventScoring
 import torch.multiprocessing
 torch.multiprocessing.set_sharing_strategy('file_system')
 from sklearn.metrics import precision_recall_curve, confusion_matrix
-
-from tuh_dataset import channels_groups, bipolar_signals_func
+from tuh_dataset import args as tuh_args
 
 
 def seed_everything(seed=99):
@@ -321,95 +320,18 @@ def test_sample_base():
     print("AUROC result: ", roc_auc_score(test_label_all, test_prob_all))
 
 
-def get_data_loader_multi(save_directory, batch_size=1):
-    file_dir = {'eval_multi': os.path.join(save_directory, 'task-multi-classification_datatype-eval'),
-                'dev_multi': os.path.join(save_directory, 'task-multi-classification_datatype-dev')}
-    file_lists = {
-        'eval_multi': {'bckg': [], 'absz': [], 'cpsz': [], 'fnsz': [], 'gnsz': [], 'mysz': [], 'spsz': [], 'tcsz': [],
-                       'tnsz': []},
-        'dev_multi': {'bckg': [], 'absz': [], 'cpsz': [], 'fnsz': [], 'gnsz': [], 'mysz': [], 'spsz': [], 'tcsz': [],
-                      'tnsz': []}}
-
-    for dirname in file_dir.keys():
-        filenames = os.listdir(file_dir[dirname])
-        for filename in filenames:
-            label = ''
-            for label in file_lists['eval_multi'].keys():
-                if label in filename:
-                    file_lists[dirname][label].append(os.path.join(file_dir[dirname], filename))
-                    break
-            if file_lists[dirname][label][-1] != os.path.join(file_dir[dirname], filename):
-                print(' ------------------- error ------------------- {}'.format(label))
-                print(filename)
-                exit()
-
-    test_transforms = transforms.Compose([transforms.ToTensor(), ])
-
-    eval_multi_data = []
-    dev_multi_data = []
-    labels = list(file_lists['eval_multi'].keys())
-    labels.remove('bckg')
-
-    for label in labels:
-        eval_multi_data += file_lists['eval_multi'][label]
-        dev_multi_data += file_lists['dev_multi'][label]
-
-        print('eval-{}-{}'.format(label, len(file_lists['eval_multi'][label])))
-        print('dev-{}-{}'.format(label, len(file_lists['dev_multi'][label])))
-
-    eval_multi_data = TUHDataset(eval_multi_data, transform=test_transforms)
-    dev_multi_data = TUHDataset(dev_multi_data, transform=test_transforms)
-
-    eval_multi_loader = DataLoader(dataset=eval_multi_data, batch_size=batch_size, shuffle=False)
-    dev_multi_loader = DataLoader(dataset=dev_multi_data, batch_size=batch_size, shuffle=False)
-
-    return eval_multi_loader, dev_multi_loader
+def extract_epoch(filename):
+    return int(filename.split('_')[1])
 
 
-def test_recall():
-    save_directory = '/home/michael/workspace/TUH/tuh_eeg_seizure/v1.5.4/second-paper/preprocess'
-    eval_multi_loader, dev_multi_loader = get_data_loader_multi(save_directory, 1)
+def get_highest_epoch_file(files):
+    if not files:
+        return None
 
-    result = {'bckg': {'total': [], 'correct_prediction': []}, 'absz': {'total': [], 'correct_prediction': []},
-              'cpsz': {'total': [], 'correct_prediction': []}, 'fnsz': {'total': [], 'correct_prediction': []},
-              'gnsz': {'total': [], 'correct_prediction': []}, 'mysz': {'total': [], 'correct_prediction': []},
-              'spsz': {'total': [], 'correct_prediction': []}, 'tcsz': {'total': [], 'correct_prediction': []},
-              'tnsz': {'total': [], 'correct_prediction': []}}
+    highest_epoch = max(extract_epoch(file) for file in files)
+    highest_epoch_files = [file for file in files if extract_epoch(file) == highest_epoch]
 
-    with torch.no_grad():
-        for data_loader in [eval_multi_loader, dev_multi_loader]:
-            for data, label, label_name in tqdm(data_loader):
-                label_name = label_name[0]
-                result[label_name]['total'].append(float(label.cpu().numpy()[0]))
-
-                test_prob = model(data.to(device))
-                test_prob = torch.squeeze(sigmoid(test_prob))
-                test_prob = float(test_prob.cpu().numpy())
-                if test_prob >= 0.3901386260986328:
-                    result[label_name]['correct_prediction'].append(test_prob)
-
-    for sz_type in ['absz', 'cpsz', 'fnsz', 'gnsz', 'mysz', 'spsz', 'tcsz', 'tnsz']:
-        if len(result[sz_type]['total']) == 0:
-            print(f"{sz_type} - len: 0")
-        else:
-            print(
-                f"{sz_type} - recall: {float(len(result[sz_type]['correct_prediction'])) / float(len(result[sz_type]['total']))}")
-
-
-def test_run():
-    test_transforms = transforms.Compose(
-        [
-            transforms.ToTensor(),
-        ]
-    )
-    path = '/home/amirshah/EPFL/EpilepsyTransformer/TUSZv2/preprocess/task-binary_datatype-eval'
-    test_data = TUHDataset(['{}/{}'.format(path, item) for item in os.listdir(path) if item.endswith('.pkl')], transform=test_transforms)
-    test_loader = DataLoader(dataset=test_data, batch_size=math.ceil(len(test_data) / 50), shuffle=False)
-    with torch.no_grad():
-        for data, label, label_name in tqdm(test_loader):
-            test_prob = model(data.to(device))
-            test_prob = torch.squeeze(sigmoid(test_prob))
-            # print(test_prob.cpu().numpy())
+    return highest_epoch, highest_epoch_files
 
 
 sample_rate = 256
@@ -418,8 +340,34 @@ device = 'cuda:0'
 # device = 'cpu'
 
 # model = torch.load('inference_ck_0.9208', map_location=torch.device(device))
-model = torch.load('/home/amirshah/EPFL/EpilepsyTransformer/TUSZv2/preprocess/test_STFT/test_model_22_0.9296276365344943',
-                   map_location=torch.device(device))
+root_path = '/home/amirshah/EPFL/EpilepsyTransformer/TUSZv2/preprocess'
+if tuh_args.global_model:  # Global model
+    model_path = os.path.join(root_path, 'test_STFT8/model_17_0.9159300189983679')
+    print("Global Model ", model_path)
+
+else:  # Channel_specific model
+    folder_path = os.path.join(root_path, 'test_8ch_{}'.format(tuh_args.selected_channel_id))
+
+    # Check if the folder exists. It means if we have trained a specific model
+    if os.path.exists(folder_path):
+        all_files = os.listdir(folder_path)
+
+        # Filter files based on the pattern
+        matching_files = [file for file in all_files if file.startswith("model")]
+        if len(matching_files) > 0:
+            # Get the highest epoch and corresponding files
+            highest_epoch, highest_epoch_files = get_highest_epoch_file(matching_files)
+
+            model_path = os.path.join(folder_path, highest_epoch_files[0])
+            print("Channel-specific Model ", model_path)
+        else:
+            print("Channel-specific Folder exists but is empty.")
+    else:
+        print("Channel-specific Folder does not exist")
+        exit()
+
+
+model = torch.load(model_path,  map_location=torch.device(device))
 print(sum(p.numel() for p in model.parameters() if p.requires_grad))
 model.eval()
 sigmoid = nn.Sigmoid()
