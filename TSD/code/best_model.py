@@ -17,9 +17,6 @@ import torch.multiprocessing
 torch.multiprocessing.set_sharing_strategy('file_system')
 
 print(f"Torch: {torch.__version__}")
-print("Channels selected for this trainin\nGroup number: {}\nChannels: {} ".format(tuh_dataset.args.selected_channels,
-                                                                                   tuh_dataset.channels_groups
-                                                                                   [tuh_dataset.args.selected_channels]))
 
 PATIENCE_EARLY_STOPPING = 4
 VAL_EVERY = 2
@@ -61,7 +58,8 @@ train_loader, val_loader, test_loader = tuh_dataset.get_data_loader(batch_size)
 
 best_val_auc = 0.0
 best_val_epoch = 0
-model_directory = os.path.join(tuh_dataset.args.save_directory, 'test_8ch_{}'.format(tuh_dataset.args.selected_channels))
+model_directory = os.path.join(tuh_dataset.args.save_directory,
+                               'test_8ch_{}'.format(tuh_dataset.args.selected_channel_id))
 if not os.path.exists(model_directory):
     os.mkdir(model_directory)
 

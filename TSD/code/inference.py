@@ -1,5 +1,5 @@
 import os
-
+import sys
 import math
 
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
@@ -362,9 +362,10 @@ else:  # Channel_specific model
             print("Channel-specific Model ", model_path)
         else:
             print("Channel-specific Folder exists but is empty.")
+            sys.exit(2)  # Exit with an error status code 2 to show that Channel-specific model does not exist
     else:
         print("Channel-specific Folder does not exist")
-        exit()
+        sys.exit(2)  # Exit with an error status code 2 to show that Channel-specific model does not exist
 
 
 model = torch.load(model_path,  map_location=torch.device(device))
