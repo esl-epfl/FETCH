@@ -3,10 +3,7 @@ import os
 import argparse
 import pickle
 from multiprocessing import Pool
-from random import shuffle
-import math
 import numpy as np
-import random
 import pandas as pd
 import pyedflib
 from scipy.signal import stft, resample
@@ -14,8 +11,6 @@ from scipy.signal import filtfilt, butter
 from torch.utils.data import DataLoader, Dataset
 from torchvision.transforms import transforms
 from tqdm import tqdm
-import seaborn as sns
-import matplotlib.pyplot as plt
 import torch
 
 torch.random.manual_seed(42)  # optional: for reproducibility

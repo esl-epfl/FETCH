@@ -2,6 +2,11 @@ import os
 
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 import random
+import warnings
+
+# Filter out the specific UserWarning related to torchvision
+warnings.filterwarnings("ignore", category=UserWarning, message="Failed to load image Python extension")
+# TODO solve the CUDA version issue
 
 import numpy as np
 import torch

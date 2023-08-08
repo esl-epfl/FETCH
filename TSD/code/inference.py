@@ -1,18 +1,19 @@
 import os
 import sys
 import math
+import json
+import warnings
+
+# Filter out the specific UserWarning related to torchvision
+warnings.filterwarnings("ignore", category=UserWarning, message="Failed to load image Python extension")
+# TODO solve the CUDA version issue
 
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
-from sklearn import metrics
 import random
-from random import shuffle
 import time
 import torch
 from torch import nn
-from torch.utils.data import DataLoader, Dataset
-from torchvision.transforms import transforms
-from sklearn.metrics import roc_auc_score
-import pickle
+from sklearn.metrics import roc_auc_score, accuracy_score, f1_score
 import numpy as np
 from scipy.signal import stft
 from tqdm import tqdm
@@ -286,6 +287,7 @@ def test_event_base():
 
 
 def test_sample_base():
+    start_time = time.time()
     save_directory = '/home/amirshah/EPFL/EpilepsyTransformer/TUSZv2/preprocess'
     train_loader, val_loader, test_loader = get_data_loader(32, save_directory, event_base=False)
 
@@ -299,9 +301,8 @@ def test_sample_base():
             val_prob = torch.squeeze(sigmoid(val_prob))
             val_prob_all = np.concatenate((val_prob_all, val_prob.cpu().numpy()))
 
-    print(set(val_label_all))
     best_th = thresh_max_f1(val_label_all, val_prob_all)
-    print("Best threshold : ", best_th)
+    validation_time = time.time() - start_time
 
     test_label_all = []
     test_prob_all = np.zeros(0, dtype=np.float)
@@ -315,9 +316,29 @@ def test_sample_base():
             test_prob_all = np.concatenate((test_prob_all, test_prob.cpu().numpy()))
 
     test_predict_all = np.where(test_prob_all > best_th, 1, 0)
-    print("Test confusion matrix: ", confusion_matrix(test_label_all, test_predict_all))
+    test_time = time.time() - start_time - validation_time
 
-    print("AUROC result: ", roc_auc_score(test_label_all, test_prob_all))
+    with open("../feasible_channels/feasible_8edges.json", 'r') as json_file:
+        selected_channels = json.load(json_file)[tuh_args.selected_channel_id]
+    # Placeholder for results
+    results = {
+        "selected_channel_id": tuh_args.selected_channel_id,
+        "selected_channels": selected_channels,
+        "best_threshold": best_th,
+        "accuracy": accuracy_score(test_label_all, test_predict_all),
+        "f1_score": f1_score(test_label_all, test_predict_all),
+        "auc": roc_auc_score(test_label_all, test_prob_all),
+        "validation_time": validation_time,
+        "test_time": test_time,
+        "confusion_matrix": confusion_matrix(test_label_all, test_predict_all).tolist()
+    }
+
+    # Save results to a JSON file
+    output_filename = "../results/results_channel_specific_{}_{}.json".format("global" if tuh_args.global_model
+                                                                              else "Channel_specific",
+                                                                              tuh_args.selected_channel_id)
+    with open(output_filename, "w") as json_file:
+        json.dump(results, json_file, indent=4)
 
 
 def extract_epoch(filename):
