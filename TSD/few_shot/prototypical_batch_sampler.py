@@ -58,7 +58,6 @@ class PrototypicalBatchSampler(object):
             batch[:spc] = self.seizure_idx[sample_idxs]
             sample_idxs = torch.randperm(self.num_non_seizure)[:spc]
             batch[spc:] = self.non_seizure_idx[sample_idxs]
-            print(batch)
             batch = batch[torch.randperm(len(batch))]
             yield batch
 

@@ -13,7 +13,7 @@ def get_parser():
     parser.add_argument('-exp', '--experiment_root',
                         type=str,
                         help='root where to store models, losses and accuracies',
-                        default='..' + os.sep + 'output')
+                        default='../output' + os.sep + 'output3')
 
     parser.add_argument('-data_root', '--data_root',
                         type=str,
@@ -53,12 +53,12 @@ def get_parser():
     parser.add_argument('-nsTr', '--num_support_tr',
                         type=int,
                         help='number of samples per class to use as support for training, default=5',
-                        default=5)
+                        default=25)
 
     parser.add_argument('-nqTr', '--num_query_tr',
                         type=int,
                         help='number of samples per class to use as query for training, default=5',
-                        default=5)
+                        default=25)
 
     parser.add_argument('-cVa', '--classes_per_it_val',
                         type=int,
@@ -68,12 +68,12 @@ def get_parser():
     parser.add_argument('-nsVa', '--num_support_val',
                         type=int,
                         help='number of samples per class to use as support for validation, default=5',
-                        default=5)
+                        default=25)
 
     parser.add_argument('-nqVa', '--num_query_val',
                         type=int,
                         help='number of samples per class to use as query for validation, default=15',
-                        default=15)
+                        default=25)
 
     parser.add_argument('-seed', '--manual_seed',
                         type=int,
@@ -83,5 +83,18 @@ def get_parser():
     parser.add_argument('--cuda',
                         action='store_false',
                         help='enables cuda')
+
+    parser.add_argument('--sample_rate', type=int, default=256)
+    parser.add_argument('--data_directory', type=str, default='/home/amirshah/EPFL/TUSZv2')
+    parser.add_argument('--save_directory', type=str,
+                        default='/home/amirshah/EPFL/EpilepsyTransformer/TUSZv2/preprocess')
+    parser.add_argument('--label_type', type=str, default='csv_bi')
+    parser.add_argument('--cpu_num', type=int, default=32)
+    parser.add_argument('--data_type', type=str, default='eval', choices=['train', 'eval', 'dev'])
+    parser.add_argument('--task_type', type=str, default='binary', choices=['binary'])
+    parser.add_argument('--slice_length', type=int, default=12)
+    parser.add_argument('--eeg_type', type=str, default='stft', choices=['original', 'bipolar', 'stft'])
+    parser.add_argument('--selected_channel_id', type=int, default=-1)
+    parser.add_argument('--global_model', action='store_true', help='enables global model')
 
     return parser

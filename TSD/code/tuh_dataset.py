@@ -1,6 +1,5 @@
 import json
 import os
-import argparse
 import pickle
 from multiprocessing import Pool
 import numpy as np
@@ -12,25 +11,9 @@ from torch.utils.data import DataLoader, Dataset
 from torchvision.transforms import transforms
 from tqdm import tqdm
 import torch
+from parser_util import get_parser
 
 torch.random.manual_seed(42)  # optional: for reproducibility
-
-parser = argparse.ArgumentParser()
-parser.add_argument('--seed', type=int, default=999)
-parser.add_argument('--sample_rate', type=int, default=256)
-parser.add_argument('--data_directory', type=str, default='/home/amirshah/EPFL/TUSZv2')
-parser.add_argument('--save_directory', type=str,
-                    default='/home/amirshah/EPFL/EpilepsyTransformer/TUSZv2/preprocess')
-parser.add_argument('--label_type', type=str, default='csv_bi')
-parser.add_argument('--cpu_num', type=int, default=32)
-parser.add_argument('--data_type', type=str, default='eval', choices=['train', 'eval', 'dev'])
-parser.add_argument('--task_type', type=str, default='binary', choices=['binary'])
-parser.add_argument('--slice_length', type=int, default=12)
-parser.add_argument('--eeg_type', type=str, default='stft', choices=['original', 'bipolar', 'stft'])
-parser.add_argument('--selected_channel_id', type=int, default=-1)
-parser.add_argument('--global_model', action='store_true', help='enables global model')
-
-args = parser.parse_args()
 
 GLOBAL_INFO = {}
 
@@ -48,6 +31,7 @@ GLOBAL_INFO = {}
 # ]
 
 TUSZv2_info_df = pd.read_json('../../input/TUSZv2_info.json')
+args = get_parser().parse_args()
 
 
 def search_walk(info):

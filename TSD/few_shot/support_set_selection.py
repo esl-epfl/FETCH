@@ -181,7 +181,7 @@ def train_random_forest():
     print(f"Test Accuracy: {test_accuracy:.2f}")
 
     # Save the trained model to a file for future inferences
-    model_filename = "rf_model.pkl"
+    model_filename = "../../output/rf_model.pkl"
     model_path = os.path.join(".", model_filename)
     joblib.dump(rf_classifier, model_path)
     print(f"Model saved to: {model_path}")
@@ -213,7 +213,7 @@ def thresh_max_f1(y_true, y_prob):
 
 def inference_random_forest():
     # Load the saved model for future inferences
-    model_path = './rf_model.pkl'
+    model_path = '../../output/rf_model.pkl'
     loaded_model = joblib.load(model_path)
 
     dev_folder = "../../TUSZv2/preprocess/task-binary_datatype-dev_features"

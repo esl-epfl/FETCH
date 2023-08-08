@@ -1,13 +1,17 @@
 # coding=utf-8
-import matplotlib.pyplot as plt
+import json
+import warnings
 
-from prototypical_batch_sampler import PrototypicalBatchSampler
-from prototypical_loss import prototypical_loss as loss_fn
-from prototypical_loss import get_prototypes, prototypical_evaluation
-from parser_util import get_parser
+# Filter out the specific UserWarning related to torchvision
+warnings.filterwarnings("ignore", category=UserWarning, message="Failed to load image Python extension")
+# TODO solve the CUDA version issue
+
+from TSD.few_shot.prototypical_batch_sampler import PrototypicalBatchSampler
+from TSD.few_shot.prototypical_loss import prototypical_loss as loss_fn
+from TSD.few_shot.prototypical_loss import get_prototypes, prototypical_evaluation
+from TSD.code.parser_util import get_parser
 from TSD.code.tuh_dataset import get_data_loader
-from TSD.code.tuh_dataset import channels_groups
-from support_set_const import seizure_support_set, non_seizure_support_set
+from TSD.few_shot.support_set_const import seizure_support_set, non_seizure_support_set
 from sklearn.metrics import roc_auc_score, confusion_matrix
 
 from tqdm import tqdm
@@ -102,7 +106,9 @@ def get_mask(selected_channels=-1):
         # Select the first 8 indices and assign 0 to the corresponding MASK elements
         MASK[indices[:8]] = 0
     else:
-        present_channels = channels_groups[selected_channels]
+        with open("../feasible_channels/feasible_8edges.json", 'r') as json_file:
+            all_feasible_channel_combination = json.load(json_file)
+        present_channels = all_feasible_channel_combination[selected_channels]
         MASK[present_channels] = 0
 
     return MASK
@@ -114,7 +120,7 @@ def get_support_set():
     for label, class_support_set in enumerate([non_seizure_support_set, seizure_support_set]):
         for filename in class_support_set:
             filepath = os.path.join("../../TUSZv2/preprocess/task-binary_datatype-train_STFT/",
-                                filename + ".pkl")
+                                    filename + ".pkl")
             with open(filepath, 'rb') as f:
                 data_pkl = pickle.load(f)
                 signals = np.asarray(data_pkl['STFT'])
@@ -317,5 +323,5 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
-    # eval()
+    # main()
+    eval()
