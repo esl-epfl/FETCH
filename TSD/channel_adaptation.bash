@@ -5,13 +5,16 @@ if [[ -z "${PYTHONPATH}" ]]; then
     export PYTHONPATH=$PARSER_DIR
 fi
 
-# Loop from 0 to 10 (inclusive)
 cd code
 
-for channel_id in {7..9}; do
+# Generate random numbers between 0 and 7542 using shuf command
+random_numbers=$(shuf -i 0-7542 -n 200)
+
+# Loop through the generated random numbers
+for channel_id in $random_numbers; do
     echo "Running inference.py with selected_channel_id=$channel_id"
     python few_shot_train.py --selected_channel_id "$channel_id"
-#    python inference.py --selected_channel_id "$channel_id" --global
+    python inference.py --selected_channel_id "$channel_id" --global
 #    python inference.py --selected_channel_id "$channel_id" 
     # Store the exit code in a variable
 #    exit_code=$?

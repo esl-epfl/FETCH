@@ -121,7 +121,7 @@ def prototypical_evaluation(prototypes, inputs):
     """
     query_samples = inputs.to('cpu')
     dists = euclidean_dist(query_samples, prototypes)
-    log_p_y = F.softmax(-dists)
+    log_p_y = F.softmax(-dists, dim=1)
     y_hat = log_p_y.argmax(dim=1)
     y_prob = log_p_y[:, 1]
     return y_prob, y_hat
