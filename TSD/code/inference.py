@@ -24,8 +24,9 @@ from epilepsy_performance_metrics.src.timescoring.annotations import Annotation
 from epilepsy_performance_metrics.src.timescoring.scoring import EventScoring
 import torch.multiprocessing
 torch.multiprocessing.set_sharing_strategy('file_system')
-from sklearn.metrics import precision_recall_curve, confusion_matrix
+from sklearn.metrics import confusion_matrix
 from tuh_dataset import args as tuh_args
+from TSD.code.utils import thresh_max_f1
 
 
 def seed_everything(seed=99):
@@ -152,75 +153,6 @@ class EEGVT(nn.Module):
         return self.mlp_head(x)
 
 
-def spectrogram_unfold_feature(signals):
-    nperseg = 250
-    noverlap = 50
-    freq_resolution = 2
-    nfft = sample_rate * freq_resolution
-    freqs, times, spec = stft(signals, fs=sample_rate, nperseg=nperseg, noverlap=noverlap, nfft=nfft, boundary=None,
-                              padded=False)
-
-    spec = spec[:, :spec.shape[1] - 1, :]
-    spec = np.reshape(spec, (-1, spec.shape[2]))
-    amp = (np.log(np.abs(spec) + 1e-10)).astype(np.float32)
-
-    return freqs, times, amp
-
-
-# class TUHDataset(Dataset):
-#     def __init__(self, file_list, transform=None):
-#         self.file_list = file_list
-#         self.file_length = len(self.file_list)
-#         self.transform = transform
-#
-#     def __len__(self):
-#         return self.file_length
-#
-#     def __getitem__(self, idx):
-#         with open(self.file_list[idx], 'rb') as f:
-#             data_pkl = pickle.load(f)
-#
-#             signals = np.asarray(bipolar_signals_func(data_pkl['signals'], 6))
-#             # print(signals.shape)
-#
-#             if eeg_type == 'stft':
-#                 f, t, signals = spectrogram_unfold_feature(signals)  # print(signals.shape)  # exit()
-#
-#             signals = self.transform(signals)
-#             label = data_pkl['label']
-#             label = 0. if label == "bckg" else 1.
-#
-#             patient_id = data_pkl['patient id']
-#             # bipolar_channel_name = data_pkl['bipolar_channel_name']
-#             confidence = data_pkl['confidence']
-#
-#         return signals, label, data_pkl['label']
-
-
-def thresh_max_f1(y_true, y_prob):
-    """
-    Find best threshold based on precision-recall curve to maximize F1-score.
-    Binary calssification only
-    """
-    if len(set(y_true)) > 2:
-        raise NotImplementedError
-
-    precision, recall, thresholds = precision_recall_curve(y_true, y_prob)
-    thresh_filt = []
-    fscore = []
-    n_thresh = len(thresholds)
-    for idx in range(n_thresh):
-        curr_f1 = (2 * precision[idx] * recall[idx]) / \
-            (precision[idx] + recall[idx])
-        if not (np.isnan(curr_f1)):
-            fscore.append(curr_f1)
-            thresh_filt.append(thresholds[idx])
-    # locate the index of the largest f score
-    ix = np.argmax(np.array(fscore))
-    best_thresh = thresh_filt[ix]
-    return best_thresh
-
-
 def test_event_base():
     save_directory = '/home/amirshah/EPFL/EpilepsyTransformer/TUSZv2/preprocess'
     train_loader, val_loader, test_loader = get_data_loader(1, save_directory, event_base=True)
@@ -334,7 +266,7 @@ def test_sample_base():
     }
 
     # Save results to a JSON file
-    output_filename = "../results/results_channel_specific_{}_{}.json".format("global" if tuh_args.global_model
+    output_filename = "../results/results_{}_{}.json".format("global" if tuh_args.global_model
                                                                               else "Channel_specific",
                                                                               tuh_args.selected_channel_id)
     with open(output_filename, "w") as json_file:

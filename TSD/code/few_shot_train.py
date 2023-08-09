@@ -1,5 +1,6 @@
 # coding=utf-8
 import json
+import time
 import warnings
 
 # Filter out the specific UserWarning related to torchvision
@@ -12,7 +13,8 @@ from TSD.few_shot.prototypical_loss import get_prototypes, prototypical_evaluati
 from TSD.code.parser_util import get_parser
 from TSD.code.tuh_dataset import get_data_loader
 from TSD.few_shot.support_set_const import seizure_support_set, non_seizure_support_set
-from sklearn.metrics import roc_auc_score, confusion_matrix
+from TSD.code.utils import thresh_max_f1
+from sklearn.metrics import roc_auc_score, confusion_matrix, accuracy_score, f1_score
 
 from tqdm import tqdm
 import numpy as np
@@ -46,15 +48,19 @@ def init_sampler(opt, labels, mode):
                                     iterations=opt.iterations)
 
 
-def init_dataloader(opt):
+def init_dataloader(opt, full_validation=False):
     ret = get_data_loader(batch_size=2*(opt.num_support_tr + opt.num_query_tr), save_dir=opt.data_root,
                           return_dataset=True, masking=False)
     tr_dataset, val_dataset, test_dataset, tr_label, val_label, test_label = ret
 
     tr_sampler = init_sampler(opt, tr_label, mode="train")
     tr_dataloader = torch.utils.data.DataLoader(tr_dataset, batch_sampler=tr_sampler, num_workers=6)
-    val_sampler = init_sampler(opt, val_label, mode="val")
-    val_dataloader = torch.utils.data.DataLoader(val_dataset, batch_sampler=val_sampler, num_workers=6)
+    if full_validation:
+        val_dataloader = torch.utils.data.DataLoader(val_dataset, batch_size=1024, num_workers=6)
+    else:
+        val_sampler = init_sampler(opt, val_label, mode="val")
+        val_dataloader = torch.utils.data.DataLoader(val_dataset, batch_sampler=val_sampler, num_workers=6)
+
     test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size=1024, num_workers=6)
 
     return tr_dataloader, val_dataloader, test_dataloader
@@ -94,10 +100,10 @@ def save_list_to_file(path, thelist):
             f.write("%s\n" % item)
 
 
-def get_mask(selected_channels=-1):
+def get_mask(selected_channel_id=-1):
     MASK = np.ones(20, dtype=np.bool)
 
-    if selected_channels == -1:
+    if selected_channel_id == -1:
         # Create a list of indices
         indices = np.arange(20)
         # Randomly shuffle the indices
@@ -108,7 +114,7 @@ def get_mask(selected_channels=-1):
     else:
         with open("../feasible_channels/feasible_8edges.json", 'r') as json_file:
             all_feasible_channel_combination = json.load(json_file)
-        present_channels = all_feasible_channel_combination[selected_channels]
+        present_channels = all_feasible_channel_combination[selected_channel_id]
         MASK[present_channels] = 0
 
     return MASK
@@ -219,12 +225,12 @@ def train(opt, tr_dataloader, model, optim, lr_scheduler, val_dataloader=None):
     return best_state, best_acc, train_loss, train_acc, val_loss, val_acc
 
 
-def test(opt, test_dataloader, model):
+def test(opt, test_dataloader, val_dataloader, model):
     """
     Test the model trained with the prototypical learning algorithm
     """
     device = 'cuda:0' if torch.cuda.is_available() and opt.cuda else 'cpu'
-    avg_acc = list()
+    start_time = time.time()
 
     model.eval()
 
@@ -232,12 +238,32 @@ def test(opt, test_dataloader, model):
     x_support_set = torch.tensor(x_support_set).to(device)
     y_support_set = torch.tensor(y_support_set).to(device)
 
-    mask = get_mask(selected_channels=2)
+    mask = get_mask(selected_channel_id=opt.selected_channel_id)
     x_support_set[:, mask, :, :] = -1  # mask the channels
     x = x_support_set.reshape((x_support_set.shape[0], 1, -1, x_support_set.shape[3]))
     model_output = model(x)
 
     prototypes = get_prototypes(model_output, target=y_support_set)
+
+    val_prob_all = []
+    val_label_all = []
+    for batch in tqdm(val_dataloader):
+        x, y = batch
+        x, y = x.to(device), y.to(device)
+
+        mask = get_mask(selected_channel_id=opt.selected_channel_id)
+        x[:, mask, :, :] = -1  # mask the channels
+        x = x.reshape((x.shape[0], 1, -1, x.shape[3]))
+        model_output = model(x)
+        prob, _ = prototypical_evaluation(prototypes, model_output)
+        val_prob_all.append(prob.detach().cpu().numpy())
+        val_label_all.append(y.detach().cpu().numpy())
+
+    val_prob_all = np.hstack(val_prob_all)
+    val_label_all = np.hstack(val_label_all)
+    best_th = thresh_max_f1(val_label_all, val_prob_all)
+    print("Best Threshold", best_th)
+    validation_time = time.time() - start_time
 
     predict = []
     predict_prob = []
@@ -246,7 +272,7 @@ def test(opt, test_dataloader, model):
         x, y = batch
         x, y = x.to(device), y.to(device)
 
-        mask = get_mask(selected_channels=2)
+        mask = get_mask(selected_channel_id=opt.selected_channel_id)
         x[:, mask, :, :] = -1  # mask the channels
         x = x.reshape((x.shape[0], 1, -1, x.shape[3]))
         model_output = model(x)
@@ -257,12 +283,30 @@ def test(opt, test_dataloader, model):
     predict = np.hstack(predict)
     predict_prob = np.hstack(predict_prob)
     true_label = np.hstack(true_label)
-    print(predict.shape)
-    print("Test confusion matrix: ", confusion_matrix(true_label, predict))
+    test_predict_all = np.where(predict_prob > best_th, 1, 0)
+    test_time = time.time() - start_time - validation_time
 
-    print("AUROC result: ", roc_auc_score(true_label, predict_prob))
+    with open("../feasible_channels/feasible_8edges.json", 'r') as json_file:
+        selected_channels = json.load(json_file)[opt.selected_channel_id]
+    # Placeholder for results
+    results = {
+        "selected_channel_id": opt.selected_channel_id,
+        "selected_channels": selected_channels,
+        "best_threshold": best_th,
+        "accuracy": accuracy_score(true_label, test_predict_all),
+        "f1_score": f1_score(true_label, test_predict_all),
+        "auc": roc_auc_score(true_label, predict_prob),
+        "validation_time": validation_time,
+        "test_time": test_time,
+        "confusion_matrix": confusion_matrix(true_label, test_predict_all).tolist()
+    }
 
-    return avg_acc
+    # Save results to a JSON file
+    output_filename = "../results/results_channel_adaptation_{}.json".format(opt.selected_channel_id)
+    with open(output_filename, "w") as json_file:
+        json.dump(results, json_file, indent=4)
+
+    return
 
 
 def eval():
@@ -275,14 +319,16 @@ def eval():
         print("WARNING: You have a CUDA device, so you should probably run with --cuda")
 
     init_seed(options)
-    tr_dataloader, _, test_dataloader = init_dataloader(options)
+    tr_dataloader, val_dataloader, test_dataloader = init_dataloader(options, full_validation=True)
     model = init_vit(options)
     model_path = os.path.join(options.experiment_root, 'best_model.pth')
     model.load_state_dict(torch.load(model_path))
 
     test(opt=options,
          test_dataloader=test_dataloader,
+         val_dataloader=val_dataloader,
          model=model)
+
 
 
 def main():
@@ -310,16 +356,6 @@ def main():
                 optim=optim,
                 lr_scheduler=lr_scheduler)
     best_state, best_acc, train_loss, train_acc, val_loss, val_acc = res
-    print('Testing with last model..')
-    test(opt=options,
-         test_dataloader=test_dataloader,
-         model=model)
-
-    model.load_state_dict(best_state)
-    print('Testing with best model..')
-    test(opt=options,
-         test_dataloader=test_dataloader,
-         model=model)
 
 
 if __name__ == '__main__':

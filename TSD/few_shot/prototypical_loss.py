@@ -123,7 +123,7 @@ def prototypical_evaluation(prototypes, inputs):
     dists = euclidean_dist(query_samples, prototypes)
     log_p_y = F.softmax(-dists)
     y_hat = log_p_y.argmax(dim=1)
-    y_prob = torch.max(log_p_y, dim=1)[0]
+    y_prob = log_p_y[:, 1]
     return y_prob, y_hat
 
 
