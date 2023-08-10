@@ -23,9 +23,9 @@ torch.multiprocessing.set_sharing_strategy('file_system')
 
 print(f"Torch: {torch.__version__}")
 
-PATIENCE_EARLY_STOPPING = 4
-VAL_EVERY = 2
-EPOCHS = 400
+PATIENCE_EARLY_STOPPING = 20
+VAL_EVERY = 5
+EPOCHS = 100
 GENERAL_MODEL = False
 
 
@@ -47,7 +47,7 @@ model = ViT(image_size=(3200, 15), patch_size=(80, 5), num_classes=1, dim=16, de
 sigmoid = nn.Sigmoid()
 
 # Training settings
-batch_size = 64
+batch_size = 128
 lr = 3e-5
 gamma = 0.7
 tuh_dataset.args.eeg_type = 'stft'

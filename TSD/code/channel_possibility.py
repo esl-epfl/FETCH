@@ -2,9 +2,10 @@ import numpy as np
 from itertools import permutations
 from tqdm import tqdm
 import json
+import os
 
 
-ones_count = 8
+ones_count = 3
 
 channels = [("FP1", "F7"),
             ("F7", "T3"),
@@ -76,8 +77,10 @@ for edge_weight_list in tqdm(all_edge_weights):
 
 # Save the list as a JSON file
 filename = "../feasible_channels/feasible_{}edges.json".format(ones_count)
-with open(filename, 'w') as json_file:
-    json.dump(all_feasible_edge_weights, json_file)
+if os.path.exists(filename):
+    raise ValueError("The feasible channels file already exists")
 
 print("Total feasible combination", len(all_feasible_edge_weights))
 
+with open(filename, 'w') as json_file:
+    json.dump(all_feasible_edge_weights, json_file)
