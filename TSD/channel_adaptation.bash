@@ -8,7 +8,7 @@ fi
 cd code
 
 # Generate random numbers between 0 and 7542 using shuf command
-random_numbers=$(shuf -i 0-7542 -n 50)
+random_numbers=$(shuf -i 0-7542 -n 100)
 
 # Loop through the generated random numbers
 for channel_id in $random_numbers; do

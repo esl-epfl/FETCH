@@ -65,11 +65,12 @@ def spectrogram_unfold_feature(signals):
 
 
 class TUHDataset(Dataset):
-    def __init__(self, file_list, transform=None, selected_channel_id=-1, masking=True):
+    def __init__(self, file_list, transform=None, selected_channel_id=-1, masking=True, remove_not_used=True):
         self.file_list = file_list
         self.file_length = len(self.file_list)
         self.transform = transform
         self.masking = masking
+        self.remove_not_used_channels = remove_not_used
         with open("../feasible_channels/feasible_8edges.json", 'r') as json_file:
             self.all_feasible_channel_combination = json.load(json_file)
         if selected_channel_id == -1:
@@ -194,7 +195,7 @@ def separate_and_sort_filenames(filenames):
 
 
 def get_data_loader(batch_size, save_dir=args.save_directory, event_base=False, random_mask=False,
-                    return_dataset=False, masking=True):
+                    return_dataset=False, masking=True, remove_not_used=False, balanced_data=True):
     file_dir = {'train': os.path.join(save_dir, 'task-binary_datatype-train_STFT'),
                 'val': os.path.join(save_dir, 'task-binary_datatype-dev_STFT'),
                 'test': os.path.join(save_dir, 'task-binary_datatype-eval_STFT')}
@@ -217,11 +218,16 @@ def get_data_loader(batch_size, save_dir=args.save_directory, event_base=False, 
         for classname in file_lists[dirname].keys():
             print('{} num: {}'.format(classname, len(file_lists[dirname][classname])))
 
-    train_data = file_lists['train']['bckg'] + file_lists['train']['seiz'] * \
-                 int(len(file_lists['train']['bckg']) / len(file_lists['train']['seiz']))
+    if balanced_data:
+        train_data = file_lists['train']['bckg'] + file_lists['train']['seiz'] * \
+                     int(len(file_lists['train']['bckg']) / len(file_lists['train']['seiz']))
+        seizure_labels = np.ones(len(file_lists['train']['seiz']) *
+                                 int(len(file_lists['train']['bckg']) / len(file_lists['train']['seiz'])))
+    else:
+        train_data = file_lists['train']['bckg'] + file_lists['train']['seiz']
+        seizure_labels = np.ones(len(file_lists['train']['seiz']))
+
     non_seizure_labels = np.zeros(len(file_lists['train']['bckg']))
-    seizure_labels = np.ones(len(file_lists['train']['seiz']) *
-                             int(len(file_lists['train']['bckg']) / len(file_lists['train']['seiz'])))
     train_label = np.concatenate((non_seizure_labels, seizure_labels))
     print('len(train_data): {}'.format(len(train_data)))
 
@@ -265,11 +271,11 @@ def get_data_loader(batch_size, save_dir=args.save_directory, event_base=False, 
     else:
         # TODO: set selected channels based on json and the args.selected_channel_id
         train_data = TUHDataset(train_data, transform=train_transforms, selected_channel_id=args.selected_channel_id,
-                                masking=masking)
+                                masking=masking, remove_not_used=remove_not_used)
         val_data = TUHDataset(val_data, transform=val_transforms, selected_channel_id=args.selected_channel_id,
-                              masking=masking)
+                              masking=masking, remove_not_used=remove_not_used)
         test_data = TUHDataset(test_data, transform=test_transforms, selected_channel_id=args.selected_channel_id,
-                               masking=masking)
+                               masking=masking, remove_not_used=remove_not_used)
 
     if return_dataset:
         return train_data, val_data, test_data, train_label, val_label, test_label

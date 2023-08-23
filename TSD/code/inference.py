@@ -221,7 +221,7 @@ def test_event_base():
 def test_sample_base():
     start_time = time.time()
     save_directory = '/home/amirshah/EPFL/EpilepsyTransformer/TUSZv2/preprocess'
-    train_loader, val_loader, test_loader = get_data_loader(32, save_directory, event_base=False)
+    _, val_loader, test_loader = get_data_loader(32, save_directory, event_base=False, remove_not_used=False)
 
     val_label_all = []
     val_prob_all = np.zeros(0, dtype=np.float)
