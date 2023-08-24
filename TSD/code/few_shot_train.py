@@ -296,6 +296,7 @@ def test(opt, test_dataloader, val_dataloader, model):
         "accuracy": accuracy_score(true_label, test_predict_all),
         "f1_score": f1_score(true_label, test_predict_all),
         "auc": roc_auc_score(true_label, predict_prob),
+        "val_auc": roc_auc_score(val_label_all, val_prob_all),
         "validation_time": validation_time,
         "test_time": test_time,
         "confusion_matrix": confusion_matrix(true_label, test_predict_all).tolist()

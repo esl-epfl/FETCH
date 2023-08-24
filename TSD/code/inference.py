@@ -260,6 +260,7 @@ def test_sample_base():
         "accuracy": accuracy_score(test_label_all, test_predict_all),
         "f1_score": f1_score(test_label_all, test_predict_all),
         "auc": roc_auc_score(test_label_all, test_prob_all),
+        "val_auc": roc_auc_score(val_label_all, val_prob_all),
         "validation_time": validation_time,
         "test_time": test_time,
         "confusion_matrix": confusion_matrix(test_label_all, test_predict_all).tolist()

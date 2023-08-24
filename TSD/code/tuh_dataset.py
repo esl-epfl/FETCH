@@ -65,7 +65,7 @@ def spectrogram_unfold_feature(signals):
 
 
 class TUHDataset(Dataset):
-    def __init__(self, file_list, transform=None, selected_channel_id=-1, masking=True, remove_not_used=True):
+    def __init__(self, file_list, transform=None, selected_channel_id=-1, masking=True, remove_not_used=False):
         self.file_list = file_list
         self.file_length = len(self.file_list)
         self.transform = transform
@@ -80,7 +80,6 @@ class TUHDataset(Dataset):
 
         print("Selected channels: ", self.selected_channels)
 
-
     def __len__(self):
         return self.file_length
 
@@ -89,12 +88,18 @@ class TUHDataset(Dataset):
             data_pkl = pickle.load(f)
             signals = np.asarray(data_pkl['STFT'])
 
-            if self.masking:
+            if self.remove_not_used_channels:
+                present_channels = self.selected_channels
+                signals = signals[present_channels]
+                signals = np.reshape(signals, (-1, signals.shape[2]))
+                signals = self.transform(signals)
+
+            elif self.masking:
                 MASK = np.ones(20, dtype=np.bool)
                 # Create a list of indices
                 indices = np.arange(20)
 
-                if self.selected_channels == None:  # if the mask is not pre-assigned
+                if self.selected_channels is None:  # if the mask is not pre-assigned
                     # Randomly shuffle the indices
                     # TODO: get random permutation from the all_feasible_channel_combination
                     indices = indices[np.random.permutation(20)]
