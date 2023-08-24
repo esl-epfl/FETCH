@@ -221,31 +221,40 @@ def test_event_base():
 def test_sample_base():
     start_time = time.time()
     save_directory = '/home/amirshah/EPFL/EpilepsyTransformer/TUSZv2/preprocess'
-    _, val_loader, test_loader = get_data_loader(32, save_directory, event_base=False, remove_not_used=False)
+    _, val_loader, test_loader = get_data_loader(2048, save_directory, event_base=False, remove_not_used=False)
 
-    val_label_all = []
-    val_prob_all = np.zeros(0, dtype=np.float)
+    val_label_all = torch.zeros(len(val_loader.dataset), dtype=torch.int).to(device)
+    val_prob_all = torch.zeros(len(val_loader.dataset), dtype=torch.float).to(device)
     with torch.no_grad():
-        for data, label in tqdm(val_loader):
-            val_label_all.extend(label.cpu().numpy())
+        for i, (data, label) in enumerate(tqdm(val_loader)):
+            start_idx = i * val_loader.batch_size
+            end_idx = start_idx + data.size(0)
+
+            val_label_all[start_idx:end_idx] = label
             val_prob = model(data.to(device))
-
             val_prob = torch.squeeze(sigmoid(val_prob))
-            val_prob_all = np.concatenate((val_prob_all, val_prob.cpu().numpy()))
+            val_prob_all[start_idx:end_idx] = val_prob
 
+    val_label_all = val_label_all.cpu().numpy()
+    val_prob_all = val_prob_all.cpu().numpy()
     best_th = thresh_max_f1(val_label_all, val_prob_all)
     validation_time = time.time() - start_time
 
-    test_label_all = []
-    test_prob_all = np.zeros(0, dtype=np.float)
+    test_label_all = torch.zeros(len(test_loader.dataset), dtype=torch.int).to(device)
+    test_prob_all = torch.zeros(len(test_loader.dataset), dtype=torch.float).to(device)
 
     with torch.no_grad():
-        for data, label in tqdm(test_loader):
-            test_label_all.extend(label)
-            test_prob = model(data.to(device))
+        for i, (data, label) in enumerate(tqdm(test_loader)):
+            start_idx = i * test_loader.batch_size
+            end_idx = start_idx + data.size(0)
 
+            test_label_all[start_idx:end_idx] = label
+            test_prob = model(data.to(device))
             test_prob = torch.squeeze(sigmoid(test_prob))
-            test_prob_all = np.concatenate((test_prob_all, test_prob.cpu().numpy()))
+            test_prob_all[start_idx:end_idx] = test_prob
+
+    test_label_all = test_label_all.cpu().numpy()
+    test_prob_all = test_prob_all.cpu().numpy()
 
     test_predict_all = np.where(test_prob_all > best_th, 1, 0)
     test_time = time.time() - start_time - validation_time
