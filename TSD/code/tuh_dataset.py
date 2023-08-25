@@ -200,22 +200,36 @@ def separate_and_sort_filenames(filenames):
 
 
 def get_data_loader(batch_size, save_dir=args.save_directory, event_base=False, random_mask=False,
-                    return_dataset=False, masking=True, remove_not_used=False, balanced_data=True):
-    file_dir = {'train': os.path.join(save_dir, 'task-binary_datatype-train_STFT'),
-                'val': os.path.join(save_dir, 'task-binary_datatype-dev_STFT'),
-                'test': os.path.join(save_dir, 'task-binary_datatype-eval_STFT')}
-    file_lists = {'train': {'bckg': [], 'seiz': []}, 'val': {'bckg': [], 'seiz': []}, 'test': {'bckg': [], 'seiz': []}}
+                    return_dataset=False, masking=True, remove_not_used=False, balanced_data=True,
+                    selected_channel_id = args.selected_channel_id):
+    # Specify the output filename
+    file_lists_filename = os.path.join(args.save_directory, "./file_lists.pkl")
+    if not os.path.exists(file_lists_filename):
+        file_dir = {'train': os.path.join(save_dir, 'task-binary_datatype-train_STFT'),
+                    'val': os.path.join(save_dir, 'task-binary_datatype-dev_STFT'),
+                    'test': os.path.join(save_dir, 'task-binary_datatype-eval_STFT')}
+        file_lists = {'train': {'bckg': [], 'seiz': []}, 'val': {'bckg': [], 'seiz': []},
+                      'test': {'bckg': [], 'seiz': []}}
 
-    for dirname in file_dir.keys():
-        filenames = os.listdir(file_dir[dirname])
-        for filename in filenames:
-            if 'bckg' in filename:
-                file_lists[dirname]['bckg'].append(os.path.join(file_dir[dirname], filename))
-            elif 'seiz' in filename:
-                file_lists[dirname]['seiz'].append(os.path.join(file_dir[dirname], filename))
-            else:
-                print('------------------------  error  ------------------------')
-                exit(-1)
+        for dirname in file_dir.keys():
+            filenames = os.listdir(file_dir[dirname])
+            for filename in filenames:
+                if 'bckg' in filename:
+                    file_lists[dirname]['bckg'].append(os.path.join(file_dir[dirname], filename))
+                elif 'seiz' in filename:
+                    file_lists[dirname]['seiz'].append(os.path.join(file_dir[dirname], filename))
+                else:
+                    print('------------------------  error  ------------------------')
+                    exit(-1)
+
+        # Save file_lists using pickle
+        with open(file_lists_filename, "wb") as pickle_file:
+            pickle.dump(file_lists, pickle_file)
+
+    else:
+        # Save file_lists using pickle
+        with open(file_lists_filename, "rb") as pickle_file:
+            file_lists = pickle.load(pickle_file)
 
     print('--------------------  file_lists  --------------------')
     for dirname in file_lists.keys():
@@ -275,11 +289,11 @@ def get_data_loader(batch_size, save_dir=args.save_directory, event_base=False, 
             test_data = TUHDataset(test_data, transform=test_transforms)
     else:
         # TODO: set selected channels based on json and the args.selected_channel_id
-        train_data = TUHDataset(train_data, transform=train_transforms, selected_channel_id=args.selected_channel_id,
+        train_data = TUHDataset(train_data, transform=train_transforms, selected_channel_id=selected_channel_id,
                                 masking=masking, remove_not_used=remove_not_used)
-        val_data = TUHDataset(val_data, transform=val_transforms, selected_channel_id=args.selected_channel_id,
+        val_data = TUHDataset(val_data, transform=val_transforms, selected_channel_id=selected_channel_id,
                               masking=masking, remove_not_used=remove_not_used)
-        test_data = TUHDataset(test_data, transform=test_transforms, selected_channel_id=args.selected_channel_id,
+        test_data = TUHDataset(test_data, transform=test_transforms, selected_channel_id=selected_channel_id,
                                masking=masking, remove_not_used=remove_not_used)
 
     if return_dataset:
