@@ -8,7 +8,7 @@ import warnings
 warnings.filterwarnings("ignore", category=UserWarning, message="Failed to load image Python extension")
 # TODO solve the CUDA version issue
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 import random
 import time
 import torch
@@ -16,7 +16,7 @@ from torch import nn
 from sklearn.metrics import roc_auc_score, accuracy_score, f1_score
 import numpy as np
 from tqdm import tqdm
-from tuh_dataset import get_data_loader
+from tuh_dataset import get_dataloader, get_data
 import torch.multiprocessing
 torch.multiprocessing.set_sharing_strategy('file_system')
 from sklearn.metrics import confusion_matrix
@@ -39,10 +39,12 @@ seed_everything(seed=99)
 
 def test_sample_base(selected_channel_id=tuh_args.selected_channel_id):
     start_time = time.time()
-    save_directory = tuh_args.save_directory
-    _, val_loader, test_loader = get_data_loader(2048, save_directory,
-                                                 selected_channel_id=selected_channel_id,
-                                                 event_base=False, remove_not_used=False)
+    _, val_loader, test_loader = get_dataloader(train_data=train_data, val_data=None, test_data=None,
+                                                validation_signal=validation_signal, val_label=val_label,
+                                                test_signal=test_signal, test_label=test_label,
+                                                batch_size=128,
+                                                selected_channel_id=selected_channel_id,
+                                                event_base=False, remove_not_used=False)
 
     val_label_all = torch.zeros(len(val_loader.dataset), dtype=torch.int).to(device)
     val_prob_all = torch.zeros(len(val_loader.dataset), dtype=torch.float).to(device)
@@ -120,7 +122,7 @@ def get_highest_epoch_file(files):
 
 sample_rate = 256
 eeg_type = 'stft'  # 'original', 'bipolar', 'stft'
-device = 'cuda:0'
+device = 'cuda:0' if tuh_args.cuda else 'cpu'
 # device = 'cpu'
 
 # model = torch.load('inference_ck_0.9208', map_location=torch.device(device))
@@ -152,10 +154,14 @@ else:  # Channel_specific model
         sys.exit(2)  # Exit with an error status code 2 to show that Channel-specific model does not exist
 
 
-model = torch.load(model_path,  map_location=torch.device(device))
+model = torch.load(model_path,  map_location=torch.device(device)).float()
 print(sum(p.numel() for p in model.parameters() if p.requires_grad))
 model.eval()
 sigmoid = nn.Sigmoid()
+
+train_data, _, _, validation_signal, val_label, test_signal, test_label = get_data(save_dir = tuh_args.save_directory)
+validation_signal = validation_signal.to(device)
+test_signal = test_signal.to(device)
 
 for i in range(0, 10):
     test_sample_base(i)
