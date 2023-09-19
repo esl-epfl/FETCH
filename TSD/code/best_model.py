@@ -25,7 +25,7 @@ print(f"Torch: {torch.__version__}")
 
 PATIENCE_EARLY_STOPPING = 10
 VAL_EVERY = 1
-EPOCHS = 50
+EPOCHS = 100
 GENERAL_MODEL = False
 
 
@@ -52,19 +52,20 @@ sigmoid = nn.Sigmoid()
 
 # Training settings
 batch_size = 1024
-lr = 3e-5
-gamma = 0.25
+lr = 1e-6
+gamma = 0.7
 tuh_dataset.args.eeg_type = 'stft'
 
 # loss function
-criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([16]).to(device))
+# criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([16]).to(device))
+criterion = nn.BCEWithLogitsLoss()
 # optimizer
 optimizer = optim.Adam(model.parameters(), lr=lr)
 # scheduler
-scheduler = StepLR(optimizer, step_size=10, gamma=gamma)
+scheduler = StepLR(optimizer, step_size=1, gamma=gamma)
 
 train_loader, val_loader, test_loader = tuh_dataset.get_data_loader(batch_size, remove_not_used=False, masking=True,
-                                                                    balanced_data=False)
+                                                                    balanced_data=True)
 
 best_val_auc = 0.0
 best_val_epoch = 0
@@ -81,28 +82,30 @@ for epoch in range(EPOCHS):
     train_label_all = []
     train_prob_all = []
     epoch_train_loss = 0
-    for data, label in tqdm(train_loader, desc='Training '):
-        train_label_all.extend(label)
+    train_auc = 0
+    if epoch != 0:
+        for data, label in tqdm(train_loader, desc='Training '):
+            train_label_all.extend(label)
 
-        data = data.to(device)
-        label = label.to(device).float()
+            data = data.to(device)
+            label = label.to(device).float()
 
-        prob = model(data)
-        prob = torch.squeeze(prob)
-        train_prob_all.extend(prob.cpu().detach().numpy())
+            prob = model(data)
+            prob = torch.squeeze(prob)
+            train_prob_all.extend(prob.cpu().detach().numpy())
 
-        loss = criterion(prob, label)
+            loss = criterion(prob, label)
 
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
 
-        epoch_train_loss += loss / len(train_loader)
+            epoch_train_loss += loss / len(train_loader)
 
-    train_auc = roc_auc_score(train_label_all, train_prob_all)
+        train_auc = roc_auc_score(train_label_all, train_prob_all)
 
-    if epoch % VAL_EVERY != VAL_EVERY-1:
-        continue
+        if epoch % VAL_EVERY != VAL_EVERY-1:
+            continue
 
     model.eval()
     val_label_all = []

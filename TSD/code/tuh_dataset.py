@@ -90,8 +90,8 @@ class TUHDataset(Dataset):
         if self.file_list is None:
             if self.signals is None:
                 raise ValueError("Both file list and signals are None!")
-            signals = self.signals[idx]
-            label = self.labels[idx]
+            signals = self.signals[idx].clone()
+            label = self.labels[idx].copy()
         else:
             with open(self.file_list[idx], 'rb') as f:
                 data_pkl = pickle.load(f)

@@ -15,7 +15,7 @@ for channel_id in $random_numbers; do
     echo "Running inference.py with selected_channel_id=$channel_id"
     python few_shot_train.py --selected_channel_id "$channel_id"
     python inference.py --selected_channel_id "$channel_id" --global
-    python inference.py --selected_channel_id "$channel_id" 
+    # python inference.py --selected_channel_id "$channel_id" 
     # Store the exit code in a variable
     exit_code=$?
    if [ "$1" = "train" ] && [ $exit_code -eq 2 ]; then
