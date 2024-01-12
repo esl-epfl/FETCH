@@ -65,11 +65,15 @@ def spectrogram_unfold_feature(signals):
 
 
 class TUHDataset(Dataset):
-    def __init__(self, file_list, transform=None, selected_channel_id=-1, masking=True):
+    def __init__(self, file_list, signals, labels, transform=None,
+                 selected_channel_id=-1, masking=True, remove_not_used=False):
         self.file_list = file_list
-        self.file_length = len(self.file_list)
+        self.signals = signals
+        self.labels = labels
+        self.file_length = len(self.file_list) if not self.file_list is None else self.signals.shape[0]
         self.transform = transform
         self.masking = masking
+        self.remove_not_used_channels = remove_not_used
         with open("../feasible_channels/feasible_8edges.json", 'r') as json_file:
             self.all_feasible_channel_combination = json.load(json_file)
         if selected_channel_id == -1:
@@ -79,38 +83,49 @@ class TUHDataset(Dataset):
 
         print("Selected channels: ", self.selected_channels)
 
-
     def __len__(self):
         return self.file_length
 
     def __getitem__(self, idx):
-        with open(self.file_list[idx], 'rb') as f:
-            data_pkl = pickle.load(f)
-            signals = np.asarray(data_pkl['STFT'])
+        if self.file_list is None:
+            if self.signals is None:
+                raise ValueError("Both file list and signals are None!")
+            signals = self.signals[idx].clone()
+            label = self.labels[idx].copy()
+        else:
+            with open(self.file_list[idx], 'rb') as f:
+                data_pkl = pickle.load(f)
+                signals = torch.from_numpy(np.asarray(data_pkl['STFT']))
+                label = data_pkl['label']
+                label = 0. if label == "bckg" else 1.
 
-            if self.masking:
-                MASK = np.ones(20, dtype=np.bool)
-                # Create a list of indices
-                indices = np.arange(20)
+        if self.remove_not_used_channels:
+            present_channels = self.selected_channels
+            signals = signals[present_channels]
+            signals = torch.reshape(signals, (-1, signals.shape[2]))
+            signals = signals.unsqueeze(0)
 
-                if self.selected_channels == None:  # if the mask is not pre-assigned
-                    # Randomly shuffle the indices
-                    # TODO: get random permutation from the all_feasible_channel_combination
-                    indices = indices[np.random.permutation(20)]
+        elif self.masking:
+            MASK = torch.ones(20, dtype=torch.bool)
+            # Create a list of indices
+            indices = torch.arange(20)
 
-                    # Select the first 8 indices and assign 0 to the corresponding MASK elements
-                    MASK[indices[:8]] = 0
-                else:
-                    present_channels = self.selected_channels
-                    MASK[present_channels] = 0
+            if self.selected_channels is None:  # if the mask is not pre-assigned
+                # Randomly shuffle the indices
+                # TODO: get random permutation from the all_feasible_channel_combination
+                indices = indices[torch.randperm(20)]
 
-                signals[MASK] = -1  # Set all elements corresponding to True in MASK to -1
+                # Select the first 8 indices and assign 0 to the corresponding MASK elements
+                MASK[indices[:8]] = 0
+            else:
+                present_channels = self.selected_channels
+                MASK[present_channels] = 0
 
-                signals = np.reshape(signals, (-1, signals.shape[2]))
-                signals = self.transform(signals)
+            signals[MASK] = -1  # Set all elements corresponding to True in MASK to -1
 
-            label = data_pkl['label']
-            label = 0. if label == "bckg" else 1.
+            signals = torch.reshape(signals, (-1, signals.shape[2]))
+            signals = signals.unsqueeze(0)
+
         return signals, label
 
 
@@ -193,23 +208,35 @@ def separate_and_sort_filenames(filenames):
     return sorted_lists
 
 
-def get_data_loader(batch_size, save_dir=args.save_directory, event_base=False, random_mask=False,
-                    return_dataset=False, masking=True):
-    file_dir = {'train': os.path.join(save_dir, 'task-binary_datatype-train_STFT'),
-                'val': os.path.join(save_dir, 'task-binary_datatype-dev_STFT'),
-                'test': os.path.join(save_dir, 'task-binary_datatype-eval_STFT')}
-    file_lists = {'train': {'bckg': [], 'seiz': []}, 'val': {'bckg': [], 'seiz': []}, 'test': {'bckg': [], 'seiz': []}}
+def get_data(save_dir=args.save_directory, balanced_data=True):
+    # Specify the output filename
+    file_lists_filename = os.path.join(args.save_directory, "./file_lists.pkl")
+    if not os.path.exists(file_lists_filename):
+        file_dir = {'train': os.path.join(save_dir, 'task-binary_datatype-train_STFT'),
+                    'val': os.path.join(save_dir, 'task-binary_datatype-dev_STFT'),
+                    'test': os.path.join(save_dir, 'task-binary_datatype-eval_STFT')}
+        file_lists = {'train': {'bckg': [], 'seiz': []}, 'val': {'bckg': [], 'seiz': []},
+                      'test': {'bckg': [], 'seiz': []}}
 
-    for dirname in file_dir.keys():
-        filenames = os.listdir(file_dir[dirname])
-        for filename in filenames:
-            if 'bckg' in filename:
-                file_lists[dirname]['bckg'].append(os.path.join(file_dir[dirname], filename))
-            elif 'seiz' in filename:
-                file_lists[dirname]['seiz'].append(os.path.join(file_dir[dirname], filename))
-            else:
-                print('------------------------  error  ------------------------')
-                exit(-1)
+        for dirname in file_dir.keys():
+            filenames = os.listdir(file_dir[dirname])
+            for filename in filenames:
+                if 'bckg' in filename:
+                    file_lists[dirname]['bckg'].append(os.path.join(file_dir[dirname], filename))
+                elif 'seiz' in filename:
+                    file_lists[dirname]['seiz'].append(os.path.join(file_dir[dirname], filename))
+                else:
+                    print('------------------------  error  ------------------------')
+                    exit(-1)
+
+        # Save file_lists using pickle
+        with open(file_lists_filename, "wb") as pickle_file:
+            pickle.dump(file_lists, pickle_file)
+
+    else:
+        # Save file_lists using pickle
+        with open(file_lists_filename, "rb") as pickle_file:
+            file_lists = pickle.load(pickle_file)
 
     print('--------------------  file_lists  --------------------')
     for dirname in file_lists.keys():
@@ -217,11 +244,16 @@ def get_data_loader(batch_size, save_dir=args.save_directory, event_base=False, 
         for classname in file_lists[dirname].keys():
             print('{} num: {}'.format(classname, len(file_lists[dirname][classname])))
 
-    train_data = file_lists['train']['bckg'] + file_lists['train']['seiz'] * \
-                 int(len(file_lists['train']['bckg']) / len(file_lists['train']['seiz']))
+    if balanced_data:
+        train_data = file_lists['train']['bckg'] + file_lists['train']['seiz'] * \
+                     int(len(file_lists['train']['bckg']) / len(file_lists['train']['seiz']))
+        seizure_labels = np.ones(len(file_lists['train']['seiz']) *
+                                 int(len(file_lists['train']['bckg']) / len(file_lists['train']['seiz'])))
+    else:
+        train_data = file_lists['train']['bckg'] + file_lists['train']['seiz']
+        seizure_labels = np.ones(len(file_lists['train']['seiz']))
+
     non_seizure_labels = np.zeros(len(file_lists['train']['bckg']))
-    seizure_labels = np.ones(len(file_lists['train']['seiz']) *
-                             int(len(file_lists['train']['bckg']) / len(file_lists['train']['seiz'])))
     train_label = np.concatenate((non_seizure_labels, seizure_labels))
     print('len(train_data): {}'.format(len(train_data)))
 
@@ -236,23 +268,27 @@ def get_data_loader(batch_size, save_dir=args.save_directory, event_base=False, 
     print('len(val_data): {}'.format(len(val_data)))
     print('len(test_data): {}'.format(len(test_data)))
 
-    train_transforms = transforms.Compose(
-        [
-            transforms.ToTensor(),
-        ]
-    )
+    validation_signal = torch.zeros((len(val_data), 20, 160, 15), dtype=torch.float)
+    test_signal = torch.zeros((len(test_data), 20, 160, 15), dtype=torch.float)
+    for input_signal, input_data_files in zip([validation_signal, test_signal], [val_data, test_data]):
+        for idx in tqdm(range(len(input_data_files)), desc="Reading input files"):
+            with open(input_data_files[idx], 'rb') as f:
+                data_pkl = pickle.load(f)
+                input_signal[idx, :,:,:] = torch.from_numpy(np.asarray(data_pkl['STFT']))
 
-    val_transforms = transforms.Compose(
-        [
-            transforms.ToTensor(),
-        ]
-    )
+    return train_data, val_data, test_data, validation_signal, val_label, test_signal, test_label
 
-    test_transforms = transforms.Compose(
-        [
-            transforms.ToTensor(),
-        ]
-    )
+
+def get_dataloader(train_data, val_data, test_data, validation_signal, val_label, test_signal, test_label,
+                    batch_size, event_base=False, random_mask=False,
+                    return_dataset=False, masking=True, remove_not_used=False,
+                    selected_channel_id = args.selected_channel_id, ):
+
+    train_transforms = transforms.ToTensor()
+
+    val_transforms =  transforms.ToTensor()
+
+    test_transforms = transforms.ToTensor()
 
     if random_mask:
         train_data = TUHDataset(train_data, transform=train_transforms, masking=masking)
@@ -264,20 +300,21 @@ def get_data_loader(batch_size, save_dir=args.save_directory, event_base=False, 
             test_data = TUHDataset(test_data, transform=test_transforms)
     else:
         # TODO: set selected channels based on json and the args.selected_channel_id
-        train_data = TUHDataset(train_data, transform=train_transforms, selected_channel_id=args.selected_channel_id,
-                                masking=masking)
-        val_data = TUHDataset(val_data, transform=val_transforms, selected_channel_id=args.selected_channel_id,
-                              masking=masking)
-        test_data = TUHDataset(test_data, transform=test_transforms, selected_channel_id=args.selected_channel_id,
-                               masking=masking)
+        train_data = TUHDataset(train_data, signals=None, labels=None, transform=train_transforms,
+                                selected_channel_id=selected_channel_id,
+                                masking=masking, remove_not_used=remove_not_used)
+        val_data = TUHDataset(None, signals=validation_signal, labels=val_label, transform=val_transforms, selected_channel_id=selected_channel_id,
+                              masking=masking, remove_not_used=remove_not_used)
+        test_data = TUHDataset(None, signals=test_signal, labels=test_label, transform=test_transforms, selected_channel_id=selected_channel_id,
+                               masking=masking, remove_not_used=remove_not_used)
 
     if return_dataset:
-        return train_data, val_data, test_data, train_label, val_label, test_label
+        return train_data, val_data, test_data
 
     else:
-        train_loader = DataLoader(dataset=train_data, batch_size=batch_size, shuffle=True, num_workers=6)
-        val_loader = DataLoader(dataset=val_data, batch_size=batch_size, shuffle=False, num_workers=6)
-        test_loader = DataLoader(dataset=test_data, batch_size=batch_size, shuffle=False, num_workers=6)
+        train_loader = DataLoader(dataset=train_data, batch_size=batch_size, shuffle=True, num_workers=0)
+        val_loader = DataLoader(dataset=val_data, batch_size=batch_size, shuffle=True, num_workers=0)
+        test_loader = DataLoader(dataset=test_data, batch_size=batch_size, shuffle=True, num_workers=0)
 
         return train_loader, val_loader, test_loader
 

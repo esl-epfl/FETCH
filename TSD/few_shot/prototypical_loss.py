@@ -119,7 +119,7 @@ def prototypical_evaluation(prototypes, inputs):
     - n_support: number of samples to keep in account when computing
       barycentres, for each one of the current classes
     """
-    query_samples = inputs.to('cpu')
+    query_samples = inputs
     dists = euclidean_dist(query_samples, prototypes)
     log_p_y = F.softmax(-dists, dim=1)
     y_hat = log_p_y.argmax(dim=1)

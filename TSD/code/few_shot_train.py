@@ -56,12 +56,12 @@ def init_dataloader(opt, full_validation=False):
     tr_sampler = init_sampler(opt, tr_label, mode="train")
     tr_dataloader = torch.utils.data.DataLoader(tr_dataset, batch_sampler=tr_sampler, num_workers=6)
     if full_validation:
-        val_dataloader = torch.utils.data.DataLoader(val_dataset, batch_size=1024, num_workers=6)
+        val_dataloader = torch.utils.data.DataLoader(val_dataset, batch_size=2048, num_workers=6)
     else:
         val_sampler = init_sampler(opt, val_label, mode="val")
         val_dataloader = torch.utils.data.DataLoader(val_dataset, batch_sampler=val_sampler, num_workers=6)
 
-    test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size=1024, num_workers=6)
+    test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size=2048, num_workers=6)
 
     return tr_dataloader, val_dataloader, test_dataloader
 
@@ -243,46 +243,54 @@ def test(opt, test_dataloader, val_dataloader, model):
     x = x_support_set.reshape((x_support_set.shape[0], 1, -1, x_support_set.shape[3]))
     model_output = model(x)
 
-    prototypes = get_prototypes(model_output, target=y_support_set)
+    prototypes = get_prototypes(model_output, target=y_support_set).to(device)
+    mask = get_mask(selected_channel_id=opt.selected_channel_id)
 
-    val_prob_all = []
-    val_label_all = []
-    for batch in tqdm(val_dataloader):
+    val_prob_all = torch.zeros(len(val_dataloader.dataset), dtype=torch.float32).to(device)
+    val_label_all = torch.zeros(len(val_dataloader.dataset), dtype=torch.int).to(device)
+
+    for i, batch in enumerate(tqdm(val_dataloader)):
         x, y = batch
         x, y = x.to(device), y.to(device)
-
-        mask = get_mask(selected_channel_id=opt.selected_channel_id)
         x[:, mask, :, :] = -1  # mask the channels
         x = x.reshape((x.shape[0], 1, -1, x.shape[3]))
         model_output = model(x)
         prob, _ = prototypical_evaluation(prototypes, model_output)
-        val_prob_all.append(prob.detach().cpu().numpy())
-        val_label_all.append(y.detach().cpu().numpy())
 
-    val_prob_all = np.hstack(val_prob_all)
-    val_label_all = np.hstack(val_label_all)
+        start_idx = i * val_dataloader.batch_size
+        end_idx = start_idx + x.size(0)
+
+        val_prob_all[start_idx:end_idx] = prob.detach()
+        val_label_all[start_idx:end_idx] = y.detach()
+
+    val_label_all = val_label_all.cpu().numpy()
+    val_prob_all = val_prob_all.cpu().numpy()
     best_th = thresh_max_f1(val_label_all, val_prob_all)
     print("Best Threshold", best_th)
     validation_time = time.time() - start_time
 
-    predict = []
-    predict_prob = []
-    true_label = []
-    for batch in tqdm(test_dataloader):
+    predict_prob = torch.zeros(len(test_dataloader.dataset), dtype=torch.float32).to(device)
+    true_label = torch.zeros(len(test_dataloader.dataset), dtype=torch.int).to(device)
+
+    mask = get_mask(selected_channel_id=opt.selected_channel_id)
+
+    for i, batch in enumerate(tqdm(test_dataloader)):
         x, y = batch
         x, y = x.to(device), y.to(device)
 
-        mask = get_mask(selected_channel_id=opt.selected_channel_id)
         x[:, mask, :, :] = -1  # mask the channels
         x = x.reshape((x.shape[0], 1, -1, x.shape[3]))
         model_output = model(x)
-        prob, output = prototypical_evaluation(prototypes, model_output)
-        predict.append(output.detach().cpu().numpy())
-        predict_prob.append(prob.detach().cpu().numpy())
-        true_label.append(y.detach().cpu().numpy())
-    predict = np.hstack(predict)
-    predict_prob = np.hstack(predict_prob)
-    true_label = np.hstack(true_label)
+        prob, _ = prototypical_evaluation(prototypes, model_output)
+
+        start_idx = i * test_dataloader.batch_size
+        end_idx = start_idx + x.size(0)
+
+        predict_prob[start_idx:end_idx] = prob.detach()
+        true_label[start_idx:end_idx] = y.detach()
+
+    predict_prob = predict_prob.cpu().numpy()
+    true_label = true_label.cpu().numpy()
     test_predict_all = np.where(predict_prob > best_th, 1, 0)
     test_time = time.time() - start_time - validation_time
 
@@ -296,6 +304,7 @@ def test(opt, test_dataloader, val_dataloader, model):
         "accuracy": accuracy_score(true_label, test_predict_all),
         "f1_score": f1_score(true_label, test_predict_all),
         "auc": roc_auc_score(true_label, predict_prob),
+        "val_auc": roc_auc_score(val_label_all, val_prob_all),
         "validation_time": validation_time,
         "test_time": test_time,
         "confusion_matrix": confusion_matrix(true_label, test_predict_all).tolist()
