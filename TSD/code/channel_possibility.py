@@ -3,9 +3,7 @@ from itertools import permutations
 from tqdm import tqdm
 import json
 import os
-
-
-ones_count = 3
+import pandas as pd
 
 channels = [("FP1", "F7"),
             ("F7", "T3"),
@@ -42,6 +40,10 @@ def check_feasibility(graph_edges, edge_weights):
         degrees[edge[1]] += 1
 
     # Check if any edge with weight 0 connects two nodes with degree >= 1
+    # For example, we choose channel 0 and 2, then we have ("FP1", "F7"), ("T3", "T5") channels
+    # If we don't have channel 1, then we have edge weight 0 for ("F7", "T3") which doesn't make sense because
+    # we already had ("FP1", "F7") and ("T3", "T5")
+
     feasible = True
     for i, weight in enumerate(edge_weights):
         if weight == 0 and degrees[channels[i][0]] >= 1 and degrees[channels[i][1]] >= 1:
@@ -51,36 +53,49 @@ def check_feasibility(graph_edges, edge_weights):
     return feasible
 
 
-def generate_edge_weights():
+def generate_edge_weights(num_channels_in_wearable):
     edge_weights = []
     total_bits = 20
 
     # Generate all combinations of 1s and 0s
-    for i in tqdm(range((2 ** total_bits))):
+    for i in range((2 ** total_bits)):
         binary_str = bin(i)[2:].zfill(total_bits)
 
         # Count the number of 1s
-        if binary_str.count('1') == ones_count:
+        if binary_str.count('1') == num_channels_in_wearable:
             edge_weights.append([int(bit) for bit in binary_str])
 
     return edge_weights
 
 
-# Generate all edge_weights lists
-all_edge_weights = generate_edge_weights()
+def main():
+    num_channels_in_EEG = 20
+    # Generate all edge_weights lists
+    all_edge_weights = []
+    for i in tqdm(range(1, num_channels_in_EEG), desc="Generating feasible channels"):
+        all_edge_weights.extend(generate_edge_weights(i))
 
-all_feasible_edge_weights = []
-for edge_weight_list in tqdm(all_edge_weights):
-    if check_feasibility([channels[i] for i, x in enumerate(edge_weight_list) if x==1], edge_weight_list):
-        all_feasible_edge_weights.append([i for i, x in enumerate(edge_weight_list) if x==1])
+    all_feasible_edge_weights = []
+    for edge_weight_list in tqdm(all_edge_weights):
+        if check_feasibility([channels[i] for i, x in enumerate(edge_weight_list) if x == 1], edge_weight_list):
+            all_feasible_edge_weights.append([i for i, x in enumerate(edge_weight_list) if x == 1])
+
+    # Save the list as a JSON file
+    dirname = "../feasible_channels"
+    filename = "feasible_{}edges.json".format(20)
+    filename = os.path.join(dirname, filename)
+    if os.path.exists(filename):
+        raise ValueError("The feasible channels file already exists")
+
+    print("Total feasible combination", len(all_feasible_edge_weights))
+
+    # check if the directory exists otherwise create it
+    if not os.path.exists(dirname):
+        os.mkdir(dirname)
+
+    with open(filename, 'w') as json_file:
+        json.dump(all_feasible_edge_weights, json_file)
 
 
-# Save the list as a JSON file
-filename = "../feasible_channels/feasible_{}edges.json".format(ones_count)
-if os.path.exists(filename):
-    raise ValueError("The feasible channels file already exists")
-
-print("Total feasible combination", len(all_feasible_edge_weights))
-
-with open(filename, 'w') as json_file:
-    json.dump(all_feasible_edge_weights, json_file)
+if __name__ == '__main__':
+    main()
