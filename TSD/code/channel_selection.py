@@ -1,6 +1,8 @@
 import numpy as np
 import pandas as pd
 import json
+import networkx as nx
+from channel_possibility import double_banana,  EEG_electrodes
 
 
 def load_json(num_channels):
@@ -34,6 +36,43 @@ def create_dataframe(num_channels):
     df['num_channels_wearable'] = df['channel_list'].apply(lambda x: len(x))
     print(df.sample(n=5))
     return df
+
+
+def node_set_to_channel_set(node_set):
+    """
+    # return the channel_set of a node_set
+    :param node_set: the set of nodes
+    :return: the channel_set according to the node_set, and the number of nodes in the final graph
+    """
+
+    # create nx_graph from double_banana. double_banana is a list of tuples like [('FP1', 'F7'), ('F7', 'T3'), ...]
+    nx_graph = nx.Graph()
+    nx_graph.add_edges_from(double_banana)
+
+    # Remove the nodes that are not in the node_set
+    # print("Extra nodes", [node for node in nx_graph.nodes if node not in node_set])
+    nx_graph.remove_nodes_from([node for node in nx_graph.nodes if node not in node_set])
+
+    # Remove isolated nodes
+    # print("Isolated nodes", list(nx.isolates(nx_graph)))
+    nx_graph.remove_nodes_from(list(nx.isolates(nx_graph)))
+
+    # print("Updated graph edges", nx_graph.edges)
+    # print("Updated graph nodes", nx_graph.nodes)
+
+    # Create a set containing the index of nx_graph edges in double_banana
+    # For example, if we have [('FP1', 'F7'), ('F7', 'T3'), ...] in nx_graph.edges
+    # and [('FP1', 'F7'), ('F7', 'T3'), ...] in double_banana
+    # then the set will be {0, 1, ...}
+    # some times the order of nodes in a tuple is reversed, so we need to check both
+    channel_set = set()
+    for edge in nx_graph.edges:
+        if edge in double_banana:
+            channel_set.add(double_banana.index(edge))
+        elif (edge[1], edge[0]) in double_banana:
+            channel_set.add(double_banana.index((edge[1], edge[0])))
+
+    return channel_set, len(nx_graph.nodes)
 
 
 def channel_id_to_channel_set(df, channel_id):
@@ -100,34 +139,62 @@ def channel_set_to_channel_mask(df, channel_set):
 
 # Channel Selection Methods
 class SequentialForwardSelection:
+    # This class is used to select channels in a sequential forward way
+    # It starts with an empty node set and add one node at a time
     def __init__(self, num_channels):
         self.num_channels = num_channels
         self.df = create_dataframe(num_channels)
-        self.channel_list = []
-        self.channel_mask = np.zeros(num_channels, dtype=int)
+        self.node_set = set()
 
     def select(self):
-        # select the next channel
-        # find the channel with the highest score
+        # select the next node
+        # find the node with the highest score
         max_score = -1
-        max_channel_id = -1
-        for i in range(self.num_channels):
-            if i not in self.channel_list:
-                channel_list = self.channel_list.copy()
-                channel_list.append(i)
-                channel_set = set(channel_list)
+        max_node_name = ''
+        max_node_name2 = ''  # in case we have empty node_set
+        pre_non_isolated_nodes = len(self.node_set)
+        # if we have empty node_set, we cannot choose a single node
+        # Therefore, we choose an edge with two nodes
+        if pre_non_isolated_nodes == 0:
+            for edge in double_banana:
+                node_set = self.node_set.copy()
+                node_set.add(edge[0])
+                node_set.add(edge[1])
+                channel_set, _ = node_set_to_channel_set(node_set)
                 channel_id = channel_set_to_channel_id(self.df, channel_set)
-                # channel_mask = channel_set_to_channel_mask(self.df, channel_set)
                 if channel_id == -1:
                     continue
-                score = self.score(channel_set)  # TODO: train a model and get the final AUC score
+                score = self.score(channel_set)
                 if score > max_score:
                     max_score = score
-                    max_channel_id = i
-        if max_channel_id == -1:
-            return
-        self.channel_list.append(max_channel_id)
-        self.channel_mask[max_channel_id] = 1
+                    max_node_name = edge[0]
+                    max_node_name2 = edge[1]
+            if max_node_name == '':
+                return
+            self.node_set.add(max_node_name)
+            self.node_set.add(max_node_name2)
+
+        else:
+            for potential_node in EEG_electrodes:
+                if potential_node not in self.node_set:
+                    print("potential_node", potential_node)
+                    node_set = self.node_set.copy()
+                    node_set.add(potential_node)
+                    channel_set, num_nodes = node_set_to_channel_set(node_set)
+                    if num_nodes != pre_non_isolated_nodes + 1:
+                        continue
+
+                    channel_id = channel_set_to_channel_id(self.df, channel_set)
+                    if channel_id == -1:
+                        print("channel_id == -1", channel_set)
+                        continue
+                    score = self.score(channel_set)  # TODO: train a model and get the final AUC score
+                    if score > max_score:
+                        max_score = score
+                        max_node_name = potential_node
+            if max_node_name == '':
+                return
+            self.node_set.add(max_node_name)
 
     def score(self, channel_set):
         """
@@ -135,17 +202,17 @@ class SequentialForwardSelection:
         """
         return sum(channel_set)
 
-    def get_channel_list(self):
+    def get_node_set(self):
         """
-        # return the channel_list of the selected channels
+        # return the node_set of the selected channels
         """
-        return self.channel_list
+        return self.node_set
 
-    def get_channel_mask(self):
+    def get_channel_set(self):
         """
-        # return the channel_mask of the selected channels
+        # return the channel_set of the selected channels
         """
-        return self.channel_mask
+        return node_set_to_channel_set(self.node_set)
 
 
 class sequentialBackwardSelection:
@@ -203,10 +270,10 @@ class sequentialBackwardSelection:
 def test_SFS():
     num_channels = 20
     sfs = SequentialForwardSelection(num_channels)
-    for i in range(num_channels):
+    for i in range(len(EEG_electrodes) - 1):
         sfs.select()
-        print(i, sfs.get_channel_list())
-        print(i, sfs.get_channel_mask())
+        print(i, sfs.get_node_set())
+        print(i, sfs.get_channel_set())
 
 
 # test function for sequentialBackwardSelection
@@ -241,9 +308,17 @@ def test_channel_id_to_channel_set():
 def test_channel_set_to_channel_id():
     num_channels = 20
     df = create_dataframe(num_channels)
-    channel_set = {0, 2}
+    channel_set = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19}
     print(channel_set_to_channel_id(df, channel_set))
 
 
+# test function for node_set_to_channel_set
+def test_node_set_to_channel_set():
+    num_channels = 20
+    df = create_dataframe(num_channels)
+    node_set = {'FP1', 'F7', 'T3', 'T5', 'O1', 'F3', 'C3', 'P3', 'Fz', 'Cz', 'Pz', 'FP2', 'F8', 'T4', 'T6', 'O2', 'F4', 'C4', 'P4', 'A2'}
+    print(node_set_to_channel_set(node_set))
+
+
 if __name__ == '__main__':
-    test_SBS()
+    test_SFS()

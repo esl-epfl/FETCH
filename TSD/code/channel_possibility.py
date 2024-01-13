@@ -5,29 +5,33 @@ import json
 import os
 import pandas as pd
 
-channels = [("FP1", "F7"),
-            ("F7", "T3"),
-            ("T3", "T5"),
-            ("T5", "O1"),
-            ("FP1", "F3"),
-            ("F3", "C3"),
-            ("C3", "P3"),
-            ("P3", "O1"),
+double_banana = [("FP1", "F7"),
+                 ("F7", "T3"),
+                 ("T3", "T5"),
+                 ("T5", "O1"),
+                 ("FP1", "F3"),
+                 ("F3", "C3"),
+                 ("C3", "P3"),
+                 ("P3", "O1"),
 
-            ("FP2", "F8"),
-            ("F8", "T4"),
-            ("T4", "T6"),
-            ("T6", "O2"),
-            ("FP2", "F4"),
-            ("F4", "C4"),
-            ("C4", "P4"),
-            ("P4", "O2"),
+                 ("FP2", "F8"),
+                 ("F8", "T4"),
+                 ("T4", "T6"),
+                 ("T6", "O2"),
+                 ("FP2", "F4"),
+                 ("F4", "C4"),
+                 ("C4", "P4"),
+                 ("P4", "O2"),
 
-            ("Fz", "Cz"),
-            ("Pz", "Cz"),
-            ("C3", "Cz"),
-            ("C4", "Cz"),
-            ]
+                 ("Fz", "Cz"),
+                 ("Pz", "Cz"),
+                 ("C3", "Cz"),
+                 ("C4", "Cz"),
+                 ]
+
+
+EEG_electrodes = ['FP1', 'F7', 'T3', 'T5', 'O1', 'F3', 'C3', 'P3', 'FP2', 'F8', 'T4',
+                  'T6', 'O2', 'F4', 'C4', 'P4', 'Fz', 'Cz', 'Pz']
 
 
 def check_feasibility(graph_edges, edge_weights):
@@ -46,7 +50,7 @@ def check_feasibility(graph_edges, edge_weights):
 
     feasible = True
     for i, weight in enumerate(edge_weights):
-        if weight == 0 and degrees[channels[i][0]] >= 1 and degrees[channels[i][1]] >= 1:
+        if weight == 0 and degrees[double_banana[i][0]] >= 1 and degrees[double_banana[i][1]] >= 1:
             feasible = False
             break
 
@@ -72,12 +76,12 @@ def main():
     num_channels_in_EEG = 20
     # Generate all edge_weights lists
     all_edge_weights = []
-    for i in tqdm(range(1, num_channels_in_EEG), desc="Generating feasible channels"):
+    for i in tqdm(range(1, num_channels_in_EEG+1), desc="Generating feasible channels"):
         all_edge_weights.extend(generate_edge_weights(i))
 
     all_feasible_edge_weights = []
     for edge_weight_list in tqdm(all_edge_weights):
-        if check_feasibility([channels[i] for i, x in enumerate(edge_weight_list) if x == 1], edge_weight_list):
+        if check_feasibility([double_banana[i] for i, x in enumerate(edge_weight_list) if x == 1], edge_weight_list):
             all_feasible_edge_weights.append([i for i, x in enumerate(edge_weight_list) if x == 1])
 
     # Save the list as a JSON file
