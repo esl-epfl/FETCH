@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import json
 import networkx as nx
-from channel_possibility import double_banana,  EEG_electrodes
+from channel_possibility import double_banana, EEG_electrodes
 
 
 def load_json(num_channels):
@@ -42,7 +42,8 @@ def node_set_to_channel_set(node_set):
     """
     # return the channel_set of a node_set
     :param node_set: the set of nodes
-    :return: the channel_set according to the node_set, and the number of nodes in the final graph
+    :return: the channel_set according to the node_set, the number of nodes in the final graph,
+    and the updated node_set
     """
 
     # create nx_graph from double_banana. double_banana is a list of tuples like [('FP1', 'F7'), ('F7', 'T3'), ...]
@@ -72,7 +73,8 @@ def node_set_to_channel_set(node_set):
         elif (edge[1], edge[0]) in double_banana:
             channel_set.add(double_banana.index((edge[1], edge[0])))
 
-    return channel_set, len(nx_graph.nodes)
+    updated_node_set = set(nx_graph.nodes)
+    return channel_set, len(nx_graph.nodes), updated_node_set
 
 
 def channel_id_to_channel_set(df, channel_id):
@@ -160,7 +162,7 @@ class SequentialForwardSelection:
                 node_set = self.node_set.copy()
                 node_set.add(edge[0])
                 node_set.add(edge[1])
-                channel_set, _ = node_set_to_channel_set(node_set)
+                channel_set, _, _ = node_set_to_channel_set(node_set)
                 channel_id = channel_set_to_channel_id(self.df, channel_set)
                 if channel_id == -1:
                     continue
@@ -180,7 +182,7 @@ class SequentialForwardSelection:
                     print("potential_node", potential_node)
                     node_set = self.node_set.copy()
                     node_set.add(potential_node)
-                    channel_set, num_nodes = node_set_to_channel_set(node_set)
+                    channel_set, num_nodes, _ = node_set_to_channel_set(node_set)
                     if num_nodes != pre_non_isolated_nodes + 1:
                         continue
 
@@ -212,40 +214,50 @@ class SequentialForwardSelection:
         """
         # return the channel_set of the selected channels
         """
-        return node_set_to_channel_set(self.node_set)
+        return node_set_to_channel_set(self.node_set)[0]
 
 
 class sequentialBackwardSelection:
     # This class is similar to SequentialForwardSelection but in the backward steps
-    # So it starts with a full channels set and remove one channel at a time
+    # It starts with a full node set and remove one node at a time
     def __init__(self, num_channels):
         self.num_channels = num_channels
         self.df = create_dataframe(num_channels)
-        self.channel_list = list(range(num_channels))
-        self.channel_mask = np.ones(num_channels, dtype=int)
+        self.node_set = set(EEG_electrodes)
 
-    def select(self):
+    def select(self, num_nodes_to_remove):
         # select the next channel
-        # find the channel with the lowest score
+        # find the node with the lowest score
         min_score = 100000
-        min_channel_id = -1
-        for i in range(self.num_channels):
-            if i in self.channel_list:
-                channel_list = self.channel_list.copy()
-                channel_list.remove(i)
-                channel_set = set(channel_list)
+        min_node_name = ''
+        min_node_name2 = ''  # in case we have to remove two nodes
+        pre_non_isolated_nodes = len(self.node_set)
+        for potential_node in EEG_electrodes:
+            if potential_node in self.node_set:
+                node_set = self.node_set.copy()
+                node_set.remove(potential_node)
+                channel_set, num_nodes, updated_node_set = node_set_to_channel_set(node_set)
+                if num_nodes != pre_non_isolated_nodes - num_nodes_to_remove:
+                    continue
                 channel_id = channel_set_to_channel_id(self.df, channel_set)
-                # channel_mask = channel_set_to_channel_mask(self.df, channel_set)
                 if channel_id == -1:
                     continue
                 score = self.score(channel_set)
                 if score < min_score:
                     min_score = score
-                    min_channel_id = i
-        if min_channel_id == -1:
-            return
-        self.channel_list.remove(min_channel_id)
-        self.channel_mask[min_channel_id] = 0
+                    min_node_name = potential_node
+                    if num_nodes_to_remove == 2:  # in case that we have to remove two nodes (due to the edges)
+                        # find the other node to remove by differentiating the self.node_set and node_set
+                        nodes_to_remove = self.node_set - updated_node_set
+                        # min_node_name2 is the node to remove after removing potential_node from nodes_to_remove
+                        min_node_name2 = list(nodes_to_remove - {potential_node})[0]
+
+        if min_node_name == '':
+            return -1
+        self.node_set.remove(min_node_name)
+        if num_nodes_to_remove == 2:
+            self.node_set.remove(min_node_name2)
+        return min_node_name
 
     def score(self, channel_set):
         """
@@ -253,17 +265,17 @@ class sequentialBackwardSelection:
         """
         return sum(channel_set)
 
-    def get_channel_list(self):
+    def get_node_set(self):
+        """
+        # return the node_set of the selected channels
+        """
+        return self.node_set
+
+    def get_channel_set(self):
         """
         # return the channel_list of the selected channels
         """
-        return self.channel_list
-
-    def get_channel_mask(self):
-        """
-        # return the channel_mask of the selected channels
-        """
-        return self.channel_mask
+        return node_set_to_channel_set(self.node_set)[0]
 
 
 # test function for SequentialForwardSelection
@@ -280,10 +292,14 @@ def test_SFS():
 def test_SBS():
     num_channels = 20
     sbs = sequentialBackwardSelection(num_channels)
-    for i in range(num_channels):
-        sbs.select()
-        print(i, sbs.get_channel_list())
-        print(i, sbs.get_channel_mask())
+    num_nodes_to_remove = 1
+    for i in range(len(EEG_electrodes) - 1):
+        node_removed = sbs.select(num_nodes_to_remove)
+        if node_removed == -1:
+            num_nodes_to_remove += 1
+        else:
+            num_nodes_to_remove = 1
+        print(i, sbs.get_node_set())
 
 
 # function to test channel_mask_to_channel_list
@@ -316,9 +332,11 @@ def test_channel_set_to_channel_id():
 def test_node_set_to_channel_set():
     num_channels = 20
     df = create_dataframe(num_channels)
-    node_set = {'FP1', 'F7', 'T3', 'T5', 'O1', 'F3', 'C3', 'P3', 'Fz', 'Cz', 'Pz', 'FP2', 'F8', 'T4', 'T6', 'O2', 'F4', 'C4', 'P4', 'A2'}
+    node_set = {'FP1', 'F7', 'T3', 'T5', 'O1', 'F3', 'C3', 'P3', 'Fz', 'Cz',
+                'Pz', 'FP2', 'F8', 'T4', 'T6', 'O2', 'F4',
+                'C4', 'P4', 'A2'}
     print(node_set_to_channel_set(node_set))
 
 
 if __name__ == '__main__':
-    test_SFS()
+    test_SBS()
