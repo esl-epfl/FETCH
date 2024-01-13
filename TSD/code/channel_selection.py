@@ -3,9 +3,7 @@ import pandas as pd
 import json
 import networkx as nx
 from channel_possibility import double_banana, EEG_electrodes
-from pymoo.algorithms.moo.nsga2 import NSGA2
-from pymoo.problems import get_problem
-from pymoo.optimize import minimize
+from best_model import train as train_model
 
 
 def load_json(num_channels):
@@ -193,7 +191,7 @@ class SequentialForwardSelection:
                     if channel_id == -1:
                         print("channel_id == -1", channel_set)
                         continue
-                    score = self.score(channel_set)  # TODO: train a model and get the final AUC score
+                    score = self.score(channel_id)  # TODO: train a model and get the final AUC score
                     if score > max_score:
                         max_score = score
                         max_node_name = potential_node
@@ -201,11 +199,12 @@ class SequentialForwardSelection:
                 return
             self.node_set.add(max_node_name)
 
-    def score(self, channel_set):
+    def score(self, channel_id):
         """
         # return the score of the selected channels
         """
-        return sum(channel_set)
+        val_auc = train_model(model_path=None, selected_channel_id=channel_id)
+        return val_auc
 
     def get_node_set(self):
         """
@@ -346,4 +345,4 @@ def test_node_set_to_channel_set():
 
 
 if __name__ == '__main__':
-    test_SBS()
+    test_SFS()

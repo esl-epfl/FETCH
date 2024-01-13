@@ -307,7 +307,7 @@ def get_dataloader(train_data, val_data, test_data, validation_signal, val_label
         train_data = TUHDataset(train_data, signals=None, labels=None, transform=train_transforms,
                                 selected_channel_id=selected_channel_id,
                                 masking=masking, remove_not_used=remove_not_used)
-        if val_data is None:   # Using signals and labels to speed up. The drawback is that it occupies more memory in GPU
+        if val_data is None:  # Using signals and labels to speedup. The drawback is that it occupies more memory in GPU
             val_data = TUHDataset(None, signals=validation_signal, labels=val_label, transform=val_transforms,
                                   selected_channel_id=selected_channel_id,
                                   masking=masking, remove_not_used=remove_not_used)
@@ -326,9 +326,9 @@ def get_dataloader(train_data, val_data, test_data, validation_signal, val_label
         return train_data, val_data, test_data
 
     else:
-        train_loader = DataLoader(dataset=train_data, batch_size=batch_size, shuffle=True, num_workers=0)
-        val_loader = DataLoader(dataset=val_data, batch_size=batch_size, shuffle=True, num_workers=0)
-        test_loader = DataLoader(dataset=test_data, batch_size=batch_size, shuffle=True, num_workers=0)
+        train_loader = DataLoader(dataset=train_data, batch_size=batch_size, shuffle=True, num_workers=6)
+        val_loader = DataLoader(dataset=val_data, batch_size=batch_size, shuffle=True, num_workers=6)
+        test_loader = DataLoader(dataset=test_data, batch_size=batch_size, shuffle=True, num_workers=6)
 
         return train_loader, val_loader, test_loader
 

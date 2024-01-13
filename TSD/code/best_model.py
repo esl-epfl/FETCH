@@ -86,7 +86,7 @@ def train(model_path=None, selected_channel_id=tuh_dataset.args.selected_channel
     best_val_auc = 0.0
     best_val_epoch = 0
     model_directory = os.path.join(tuh_dataset.args.save_directory,
-                                   'test_{}'.format(tuh_dataset.args.selected_channel_id))
+                                   'test_SFS_{}'.format(selected_channel_id))
     if not os.path.exists(model_directory):
         os.mkdir(model_directory)
 
@@ -116,6 +116,7 @@ def train(model_path=None, selected_channel_id=tuh_dataset.args.selected_channel
 
                 epoch_train_loss += loss / len(train_loader)
 
+            scheduler.step()
             train_auc = roc_auc_score(train_label_all, train_prob_all)
 
             if epoch % VAL_EVERY != VAL_EVERY - 1:
@@ -177,6 +178,8 @@ def train(model_path=None, selected_channel_id=tuh_dataset.args.selected_channel
             torch.save(model, os.path.join(model_directory, 'test_model_last_{}'.format(epoch)))
             break
 
+    return best_val_auc
 
-if __name__ == '__main__':
-    train(model_path=None, selected_channel_id=0)
+
+# if __name__ == '__main__':
+#     train(model_path=None, selected_channel_id=0)
