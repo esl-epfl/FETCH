@@ -124,10 +124,61 @@ class SequentialForwardSelection:
                 if score > max_score:
                     max_score = score
                     max_channel_id = i
-        if max_channel_id is -1:
+        if max_channel_id == -1:
             return
         self.channel_list.append(max_channel_id)
         self.channel_mask[max_channel_id] = 1
+
+    def score(self, channel_set):
+        """
+        # return the score of the selected channels
+        """
+        return sum(channel_set)
+
+    def get_channel_list(self):
+        """
+        # return the channel_list of the selected channels
+        """
+        return self.channel_list
+
+    def get_channel_mask(self):
+        """
+        # return the channel_mask of the selected channels
+        """
+        return self.channel_mask
+
+
+class sequentialBackwardSelection:
+    # This class is similar to SequentialForwardSelection but in the backward steps
+    # So it starts with a full channels set and remove one channel at a time
+    def __init__(self, num_channels):
+        self.num_channels = num_channels
+        self.df = create_dataframe(num_channels)
+        self.channel_list = list(range(num_channels))
+        self.channel_mask = np.ones(num_channels, dtype=int)
+
+    def select(self):
+        # select the next channel
+        # find the channel with the lowest score
+        min_score = 100000
+        min_channel_id = -1
+        for i in range(self.num_channels):
+            if i in self.channel_list:
+                channel_list = self.channel_list.copy()
+                channel_list.remove(i)
+                channel_set = set(channel_list)
+                channel_id = channel_set_to_channel_id(self.df, channel_set)
+                # channel_mask = channel_set_to_channel_mask(self.df, channel_set)
+                if channel_id == -1:
+                    continue
+                score = self.score(channel_set)
+                if score < min_score:
+                    min_score = score
+                    min_channel_id = i
+        if min_channel_id == -1:
+            return
+        self.channel_list.remove(min_channel_id)
+        self.channel_mask[min_channel_id] = 0
 
     def score(self, channel_set):
         """
@@ -154,8 +205,18 @@ def test_SFS():
     sfs = SequentialForwardSelection(num_channels)
     for i in range(num_channels):
         sfs.select()
-    print(sfs.get_channel_list())
-    print(sfs.get_channel_mask())
+        print(i, sfs.get_channel_list())
+        print(i, sfs.get_channel_mask())
+
+
+# test function for sequentialBackwardSelection
+def test_SBS():
+    num_channels = 20
+    sbs = sequentialBackwardSelection(num_channels)
+    for i in range(num_channels):
+        sbs.select()
+        print(i, sbs.get_channel_list())
+        print(i, sbs.get_channel_mask())
 
 
 # function to test channel_mask_to_channel_list
@@ -185,4 +246,4 @@ def test_channel_set_to_channel_id():
 
 
 if __name__ == '__main__':
-    test_SFS()
+    test_SBS()
