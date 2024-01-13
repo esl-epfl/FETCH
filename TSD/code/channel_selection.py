@@ -3,6 +3,9 @@ import pandas as pd
 import json
 import networkx as nx
 from channel_possibility import double_banana, EEG_electrodes
+from pymoo.algorithms.moo.nsga2 import NSGA2
+from pymoo.problems import get_problem
+from pymoo.optimize import minimize
 
 
 def load_json(num_channels):
@@ -276,6 +279,10 @@ class sequentialBackwardSelection:
         # return the channel_list of the selected channels
         """
         return node_set_to_channel_set(self.node_set)[0]
+
+
+class NSGAII:
+    pass
 
 
 # test function for SequentialForwardSelection

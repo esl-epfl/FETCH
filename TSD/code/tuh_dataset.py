@@ -65,7 +65,7 @@ def spectrogram_unfold_feature(signals):
 
 
 class TUHDataset(Dataset):
-    def __init__(self, file_list, signals, labels, transform=None,
+    def __init__(self, file_list, signals=None, labels= None, transform=None,
                  selected_channel_id=-1, masking=True, remove_not_used=False):
         self.file_list = file_list
         self.signals = signals
@@ -74,7 +74,7 @@ class TUHDataset(Dataset):
         self.transform = transform
         self.masking = masking
         self.remove_not_used_channels = remove_not_used
-        with open("../feasible_channels/feasible_8edges.json", 'r') as json_file:
+        with open("../feasible_channels/feasible_20edges.json", 'r') as json_file:
             self.all_feasible_channel_combination = json.load(json_file)
         if selected_channel_id == -1:
             self.selected_channels = None
@@ -208,7 +208,7 @@ def separate_and_sort_filenames(filenames):
     return sorted_lists
 
 
-def get_data(save_dir=args.save_directory, balanced_data=True):
+def get_data(save_dir=args.save_directory, balanced_data=True, return_signal=False):
     # Specify the output filename
     file_lists_filename = os.path.join(args.save_directory, "./file_lists.pkl")
     if not os.path.exists(file_lists_filename):
@@ -260,23 +260,27 @@ def get_data(save_dir=args.save_directory, balanced_data=True):
     val_data = file_lists['val']['bckg'] + file_lists['val']['seiz']
     test_data = file_lists['test']['bckg'] + file_lists['test']['seiz']
 
-    val_label = np.concatenate((np.zeros(len(file_lists['val']['bckg'])),
-                                np.ones(len(file_lists['val']['seiz']))))
-    test_label = np.concatenate((np.zeros(len(file_lists['test']['bckg'])),
-                                 np.ones(len(file_lists['test']['seiz']))))
-
     print('len(val_data): {}'.format(len(val_data)))
     print('len(test_data): {}'.format(len(test_data)))
 
-    validation_signal = torch.zeros((len(val_data), 20, 160, 15), dtype=torch.float)
-    test_signal = torch.zeros((len(test_data), 20, 160, 15), dtype=torch.float)
-    for input_signal, input_data_files in zip([validation_signal, test_signal], [val_data, test_data]):
-        for idx in tqdm(range(len(input_data_files)), desc="Reading input files"):
-            with open(input_data_files[idx], 'rb') as f:
-                data_pkl = pickle.load(f)
-                input_signal[idx, :,:,:] = torch.from_numpy(np.asarray(data_pkl['STFT']))
+    if return_signal:
+        val_label = np.concatenate((np.zeros(len(file_lists['val']['bckg'])),
+                                    np.ones(len(file_lists['val']['seiz']))))
+        test_label = np.concatenate((np.zeros(len(file_lists['test']['bckg'])),
+                                     np.ones(len(file_lists['test']['seiz']))))
 
-    return train_data, val_data, test_data, validation_signal, val_label, test_signal, test_label
+        validation_signal = torch.zeros((len(val_data), 20, 160, 15), dtype=torch.float)
+        test_signal = torch.zeros((len(test_data), 20, 160, 15), dtype=torch.float)
+        for input_signal, input_data_files in zip([validation_signal, test_signal], [val_data, test_data]):
+            for idx in tqdm(range(len(input_data_files)), desc="Reading input files"):
+                with open(input_data_files[idx], 'rb') as f:
+                    data_pkl = pickle.load(f)
+                    input_signal[idx, :,:,:] = torch.from_numpy(np.asarray(data_pkl['STFT']))
+
+        return train_data, val_data, test_data, validation_signal, val_label, test_signal, test_label
+
+    else:
+        return train_data, val_data, test_data, None, None, None, None
 
 
 def get_dataloader(train_data, val_data, test_data, validation_signal, val_label, test_signal, test_label,
@@ -303,10 +307,20 @@ def get_dataloader(train_data, val_data, test_data, validation_signal, val_label
         train_data = TUHDataset(train_data, signals=None, labels=None, transform=train_transforms,
                                 selected_channel_id=selected_channel_id,
                                 masking=masking, remove_not_used=remove_not_used)
-        val_data = TUHDataset(None, signals=validation_signal, labels=val_label, transform=val_transforms, selected_channel_id=selected_channel_id,
-                              masking=masking, remove_not_used=remove_not_used)
-        test_data = TUHDataset(None, signals=test_signal, labels=test_label, transform=test_transforms, selected_channel_id=selected_channel_id,
-                               masking=masking, remove_not_used=remove_not_used)
+        if val_data is None:   # Using signals and labels to speed up. The drawback is that it occupies more memory in GPU
+            val_data = TUHDataset(None, signals=validation_signal, labels=val_label, transform=val_transforms,
+                                  selected_channel_id=selected_channel_id,
+                                  masking=masking, remove_not_used=remove_not_used)
+            test_data = TUHDataset(None, signals=test_signal, labels=test_label, transform=test_transforms,
+                                   selected_channel_id=selected_channel_id,
+                                   masking=masking, remove_not_used=remove_not_used)
+        else:
+            val_data = TUHDataset(val_data, signals= None, labels=None, transform=val_transforms, masking=masking,
+                                  selected_channel_id=selected_channel_id,
+                                  remove_not_used=remove_not_used)
+            test_data = TUHDataset(test_data, signals=None, labels=None, transform=test_transforms, masking=masking,
+                                   selected_channel_id=selected_channel_id,
+                                   remove_not_used=remove_not_used)
 
     if return_dataset:
         return train_data, val_data, test_data
