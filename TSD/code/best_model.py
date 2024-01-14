@@ -15,6 +15,7 @@ import torch.optim as optim
 from sklearn.metrics import roc_auc_score
 from torch.optim.lr_scheduler import StepLR
 from tqdm import tqdm
+import json
 
 import tuh_dataset
 from vit_pytorch.vit import ViT
@@ -46,7 +47,12 @@ def train(model_path=None, selected_channel_id=tuh_dataset.args.selected_channel
     seed_everything()
 
     if model_path is None:
-        model = ViT(image_size=(3200, 15), patch_size=(80, 5), num_classes=1,
+        with open("../feasible_channels/feasible_20edges.json", 'r') as json_file:
+            channel_set = json.load(json_file)[selected_channel_id]  # Get all feasible channels and take
+            # num of channels based on selected_channel_id
+            num_channels = len(channel_set)
+        print(f"Number of channels: {num_channels}")
+        model = ViT(image_size=(160*num_channels, 15), patch_size=(80, 5), num_classes=1,
                     dim=16, depth=4, heads=4, mlp_dim=4, pool='cls',
                     channels=1, dim_head=4, dropout=0.2, emb_dropout=0.2).to(device)
     else:
@@ -72,7 +78,7 @@ def train(model_path=None, selected_channel_id=tuh_dataset.args.selected_channel
 
     # load data
     train_data, _, _, validation_signal, val_label, test_signal, test_label = \
-        tuh_dataset.get_data(save_dir=tuh_dataset.args.save_directory, balanced_data=True, return_signal=False)
+        tuh_dataset.get_data(save_dir=tuh_dataset.args.save_directory, balanced_data=True, return_signal=True)
 
     train_loader, val_loader, test_loader = \
         tuh_dataset.get_dataloader(train_data=train_data, val_data=None, test_data=None,
@@ -81,7 +87,7 @@ def train(model_path=None, selected_channel_id=tuh_dataset.args.selected_channel
                                    batch_size=batch_size,
                                    selected_channel_id=selected_channel_id,
                                    return_dataset=False,
-                                   event_base=False, masking=True, random_mask=False, remove_not_used=False)
+                                   event_base=False, masking=False, random_mask=False, remove_not_used=True)
 
     best_val_auc = 0.0
     best_val_epoch = 0
@@ -181,4 +187,4 @@ def train(model_path=None, selected_channel_id=tuh_dataset.args.selected_channel
 
 
 if __name__ == '__main__':
-    train(model_path=None, selected_channel_id=48346)
+    train(model_path=None, selected_channel_id=48345)
