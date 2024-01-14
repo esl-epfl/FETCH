@@ -57,8 +57,8 @@ def train(model_path=None, selected_channel_id=tuh_dataset.args.selected_channel
     sigmoid = nn.Sigmoid()
 
     # Training settings
-    batch_size = 1024
-    lr = 1e-6
+    batch_size = 256
+    lr = 3e-5
     gamma = 0.7
     tuh_dataset.args.eeg_type = 'stft'
 
@@ -71,17 +71,17 @@ def train(model_path=None, selected_channel_id=tuh_dataset.args.selected_channel
     scheduler = StepLR(optimizer, step_size=1, gamma=gamma)
 
     # load data
-    train_data, val_data, test_data, _, _, _, _ = \
+    train_data, _, _, validation_signal, val_label, test_signal, test_label = \
         tuh_dataset.get_data(save_dir=tuh_dataset.args.save_directory, balanced_data=True, return_signal=False)
 
     train_loader, val_loader, test_loader = \
-        tuh_dataset.get_dataloader(train_data=train_data, val_data=val_data, test_data=test_data,
-                                   validation_signal=None, val_label=None,
-                                   test_signal=None, test_label=None,
+        tuh_dataset.get_dataloader(train_data=train_data, val_data=None, test_data=None,
+                                   validation_signal=validation_signal, val_label=val_label,
+                                   test_signal=test_signal, test_label=test_label,
                                    batch_size=batch_size,
                                    selected_channel_id=selected_channel_id,
                                    return_dataset=False,
-                                   event_base=False, masking=False, random_mask=False, remove_not_used=True)
+                                   event_base=False, masking=True, random_mask=False, remove_not_used=False)
 
     best_val_auc = 0.0
     best_val_epoch = 0
@@ -180,5 +180,5 @@ def train(model_path=None, selected_channel_id=tuh_dataset.args.selected_channel
     return best_val_auc
 
 
-# if __name__ == '__main__':
-#     train(model_path=None, selected_channel_id=0)
+if __name__ == '__main__':
+    train(model_path=None, selected_channel_id=48346)
