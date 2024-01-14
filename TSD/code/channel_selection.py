@@ -167,7 +167,7 @@ class SequentialForwardSelection:
                 channel_id = channel_set_to_channel_id(self.df, channel_set)
                 if channel_id == -1:
                     continue
-                score = self.score(channel_set)
+                score = self.score(channel_id)
                 if score > max_score:
                     max_score = score
                     max_node_name = edge[0]
@@ -180,7 +180,7 @@ class SequentialForwardSelection:
         else:
             for potential_node in EEG_electrodes:
                 if potential_node not in self.node_set:
-                    print("potential_node", potential_node)
+                    # print("potential_node", potential_node)
                     node_set = self.node_set.copy()
                     node_set.add(potential_node)
                     channel_set, num_nodes, _ = node_set_to_channel_set(node_set)
@@ -191,7 +191,7 @@ class SequentialForwardSelection:
                     if channel_id == -1:
                         print("channel_id == -1", channel_set)
                         continue
-                    score = self.score(channel_id)  # TODO: train a model and get the final AUC score
+                    score = self.score(channel_id)
                     if score > max_score:
                         max_score = score
                         max_node_name = potential_node
@@ -244,7 +244,7 @@ class sequentialBackwardSelection:
                 channel_id = channel_set_to_channel_id(self.df, channel_set)
                 if channel_id == -1:
                     continue
-                score = self.score(channel_set)
+                score = self.score(channel_id)
                 if score < min_score:
                     min_score = score
                     min_node_name = potential_node
@@ -261,11 +261,12 @@ class sequentialBackwardSelection:
             self.node_set.remove(min_node_name2)
         return min_node_name
 
-    def score(self, channel_set):
+    def score(self, channel_id):
         """
         # return the score of the selected channels
         """
-        return sum(channel_set)
+        val_auc = train_model(model_path=None, selected_channel_id=channel_id)
+        return val_auc
 
     def get_node_set(self):
         """
@@ -345,4 +346,4 @@ def test_node_set_to_channel_set():
 
 
 if __name__ == '__main__':
-    test_SFS()
+    test_SBS()

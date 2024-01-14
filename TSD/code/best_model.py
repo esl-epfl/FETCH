@@ -116,7 +116,6 @@ def train(model_path=None, selected_channel_id=tuh_dataset.args.selected_channel
 
                 epoch_train_loss += loss / len(train_loader)
 
-            scheduler.step()
             train_auc = roc_auc_score(train_label_all, train_prob_all)
 
             if epoch % VAL_EVERY != VAL_EVERY - 1:
