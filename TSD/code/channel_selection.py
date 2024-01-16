@@ -3,7 +3,13 @@ import pandas as pd
 import json
 import networkx as nx
 from channel_possibility import double_banana, EEG_electrodes
-from best_model import train as train_model
+# from best_model import train as train_model
+import pymoo
+from pymoo.algorithms.moo.nsga2 import NSGA2
+from pymoo.core.variable import Binary
+from pymoo.core.problem import Problem
+from pymoo.core.mixed import MixedVariableMating, MixedVariableSampling, MixedVariableDuplicateElimination
+from pymoo.optimize import minimize
 
 
 def load_json(num_channels):
@@ -282,7 +288,53 @@ class sequentialBackwardSelection:
 
 
 class NSGAII:
-    pass
+    def __init__(self, num_channels):
+        self.num_channels = num_channels
+        self.df = create_dataframe(num_channels)
+        mixed_variable = {x: Binary() for x in EEG_electrodes}
+        self.problem = SteelManufacturing(mixed_variable)
+
+        self.algorithm = NSGA2(pop_size=20,
+                          sampling=MixedVariableSampling(),  # TODO: update with binary sampling
+                          mating=MixedVariableMating(eliminate_duplicates=MixedVariableDuplicateElimination()),
+                          eliminate_duplicates=False)
+
+    def select(self):
+        res = minimize(self.problem,
+                       self.algorithm,
+                       ('n_gen', 20),
+                       verbose=False,
+                       seed=42)
+
+        return res
+
+
+class SteelManufacturing(Problem):
+    def __init__(self, mixed_variables, **kwargs):
+        super().__init__(vars=mixed_variables, n_obj=2,
+                         **kwargs)
+
+    def _evaluate(self, x, out, *args, **kwargs):
+        # Type conversion for Prediction and Constraint
+        temp_df = pd.DataFrame(list(x))
+        obj1 = -1 * self.score(temp_df)  # Maximise
+        obj2 = self.obj_num_electrode(temp_df) # Minimize the number of electrodes
+
+        out["F"] = np.column_stack([obj1, obj2])
+
+    def score(self, temp_df):
+        return np.sin(temp_df.sum(axis=1))  # TODO: train a model
+
+    def obj_num_electrode(self, temp_df):
+        return temp_df.sum(axis=1)
+
+
+def test_nsga():
+    num_channels = 20
+    nsga = NSGAII(num_channels)
+    res = nsga.select()
+    result = pd.DataFrame(list(res.X))
+    print(result)
 
 
 # test function for SequentialForwardSelection
@@ -346,4 +398,4 @@ def test_node_set_to_channel_set():
 
 
 if __name__ == '__main__':
-    test_SBS()
+    test_nsga()
