@@ -7,7 +7,7 @@ from channel_possibility import double_banana, EEG_electrodes
 import pymoo
 from pymoo.algorithms.moo.nsga2 import NSGA2
 from pymoo.core.variable import Binary
-from pymoo.core.problem import Problem
+from pymoo.core.problem import Problem, ElementwiseProblem
 from pymoo.core.mixed import MixedVariableMating, MixedVariableSampling, MixedVariableDuplicateElimination
 from pymoo.optimize import minimize
 
@@ -292,7 +292,7 @@ class NSGAII:
         self.num_channels = num_channels
         self.df = create_dataframe(num_channels)
         mixed_variable = {x: Binary() for x in EEG_electrodes}
-        self.problem = SteelManufacturing(mixed_variable)
+        self.problem = SteelManufacturing(mixed_variable, self.df)
 
         self.algorithm = NSGA2(pop_size=20,
                           sampling=MixedVariableSampling(),  # TODO: update with binary sampling
@@ -309,24 +309,36 @@ class NSGAII:
         return res
 
 
-class SteelManufacturing(Problem):
-    def __init__(self, mixed_variables, **kwargs):
+class SteelManufacturing(ElementwiseProblem):
+    def __init__(self, mixed_variables, df, **kwargs):
         super().__init__(vars=mixed_variables, n_obj=2,
+                         n_ieq_constr=1,
                          **kwargs)
+        self.df = df
 
     def _evaluate(self, x, out, *args, **kwargs):
         # Type conversion for Prediction and Constraint
-        temp_df = pd.DataFrame(list(x))
-        obj1 = -1 * self.score(temp_df)  # Maximise
-        obj2 = self.obj_num_electrode(temp_df) # Minimize the number of electrodes
+        node_set = [x for (x,y) in x.items() if y]
+        channel_set, num_nodes, _ = node_set_to_channel_set(node_set)
+        channel_id = channel_set_to_channel_id(self.df, channel_set)
+        if channel_id == -1:
+            print("channel_id == -1", node_set, num_nodes)
+        score = self.score(channel_id)
+        obj1 = -1 * score  # Maximise
+        obj2 = num_nodes  # Minimize the number of electrodes
+
+        g1 = 1 - num_nodes
 
         out["F"] = np.column_stack([obj1, obj2])
+        out["G"] = np.column_stack([g1])
 
-    def score(self, temp_df):
-        return np.sin(temp_df.sum(axis=1))  # TODO: train a model
+    def score(self, channel_id):
+        if channel_id == -1:
+            return 0
+        return channel_id  # TODO: train a model
 
     def obj_num_electrode(self, temp_df):
-        return temp_df.sum(axis=1)
+        return temp_df.sum()
 
 
 def test_nsga():
@@ -335,6 +347,7 @@ def test_nsga():
     res = nsga.select()
     result = pd.DataFrame(list(res.X))
     print(result)
+    # TODO: Plot the results
 
 
 # test function for SequentialForwardSelection
