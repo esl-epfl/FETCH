@@ -4,12 +4,16 @@ import json
 import networkx as nx
 from channel_possibility import double_banana, EEG_electrodes
 # from best_model import train as train_model
-import pymoo
 from pymoo.algorithms.moo.nsga2 import NSGA2
 from pymoo.core.variable import Binary
 from pymoo.core.problem import Problem, ElementwiseProblem
 from pymoo.core.mixed import MixedVariableMating, MixedVariableSampling, MixedVariableDuplicateElimination
 from pymoo.optimize import minimize
+
+from pymoo.termination.max_gen import MaximumGenerationTermination
+from pymoo.operators.mutation.bitflip import BitflipMutation
+from pymoo.operators.sampling.rnd import BinaryRandomSampling
+import dill
 
 
 def load_json(num_channels):
@@ -41,7 +45,7 @@ def create_dataframe(num_channels):
     df['channel_id'] = df.index
     df['channel_mask'] = df['channel_list'].apply(lambda x: np.array([1 if i in x else 0 for i in range(num_channels)]))
     df['num_channels_wearable'] = df['channel_list'].apply(lambda x: len(x))
-    print(df.sample(n=5))
+    # print(df.sample(n=5))
     return df
 
 
@@ -295,16 +299,38 @@ class NSGAII:
         self.problem = SteelManufacturing(mixed_variable, self.df)
 
         self.algorithm = NSGA2(pop_size=20,
-                          sampling=MixedVariableSampling(),  # TODO: update with binary sampling
+                          sampling=MixedVariableSampling(),
                           mating=MixedVariableMating(eliminate_duplicates=MixedVariableDuplicateElimination()),
                           eliminate_duplicates=False)
 
     def select(self):
+        res = None
+        for i in range(20):
+            print("Generation", i)
+            self.algorithm.termination = MaximumGenerationTermination(i + 1)
+            res = minimize(self.problem,
+                           self.algorithm,
+                           copy_algorithm=False,
+                           verbose=True,
+                           seed=42)
+            with open("checkpoint", "wb") as f:
+                dill.dump(self.algorithm, f)
+
+        return res
+
+    def resume(self):
+        with open("checkpoint", 'rb') as f:
+            checkpoint = dill.load(f)
+            print("Loaded Checkpoint:", checkpoint)
+
+        # only necessary if for the checkpoint the termination criterion has been met
+        checkpoint.termination = MaximumGenerationTermination(20)
+
         res = minimize(self.problem,
-                       self.algorithm,
-                       ('n_gen', 20),
-                       verbose=False,
-                       seed=42)
+                       checkpoint,
+                       seed=42,
+                       copy_algorithm=False,
+                       verbose=True)
 
         return res
 
@@ -335,7 +361,8 @@ class SteelManufacturing(ElementwiseProblem):
     def score(self, channel_id):
         if channel_id == -1:
             return 0
-        return channel_id  # TODO: train a model
+        val_auc = train_model(model_path=None, selected_channel_id=channel_id)
+        return val_auc
 
     def obj_num_electrode(self, temp_df):
         return temp_df.sum()
@@ -347,7 +374,6 @@ def test_nsga():
     res = nsga.select()
     result = pd.DataFrame(list(res.X))
     print(result)
-    # TODO: Plot the results
 
 
 # test function for SequentialForwardSelection

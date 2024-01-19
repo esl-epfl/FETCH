@@ -16,6 +16,7 @@ from sklearn.metrics import roc_auc_score
 from torch.optim.lr_scheduler import StepLR
 from tqdm import tqdm
 import json
+from channel_selection import double_banana, create_dataframe
 
 import tuh_dataset
 from vit_pytorch.vit import ViT
@@ -92,7 +93,7 @@ def train(model_path=None, selected_channel_id=tuh_dataset.args.selected_channel
     best_val_auc = 0.0
     best_val_epoch = 0
     model_directory = os.path.join(tuh_dataset.args.save_directory,
-                                   'test_SFS_{}'.format(selected_channel_id))
+                                   'test_scratch_{}'.format(selected_channel_id))
     if not os.path.exists(model_directory):
         os.mkdir(model_directory)
 
@@ -186,5 +187,25 @@ def train(model_path=None, selected_channel_id=tuh_dataset.args.selected_channel
     return best_val_auc
 
 
+def get_feasible_ids_with_num_nodes(num_nodes):
+    def channel_list_to_node_set(x):
+        node_set = set()
+        edge_lists = [double_banana[a] for a in x]
+        for node1, node2 in edge_lists:
+            node_set.add(node1)
+            node_set.add(node2)
+        return len(node_set)
+    df = create_dataframe(20)
+    df['number_nodes'] = df['channel_list'].apply(channel_list_to_node_set)
+    df_num_nodes = df[df['number_nodes'] == num_nodes]
+    return df_num_nodes['channel_id'].tolist()
+
+
 if __name__ == '__main__':
-    train(model_path=None, selected_channel_id=48345)
+    channel_ids = get_feasible_ids_with_num_nodes(8)
+    print(len(channel_ids))
+    # random permutation of channel_ids
+    random.shuffle(channel_ids)
+
+    for channel_id in channel_ids[:1]:
+        train(selected_channel_id=channel_id, model_path=None)
