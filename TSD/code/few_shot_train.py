@@ -11,7 +11,7 @@ from TSD.few_shot.prototypical_batch_sampler import PrototypicalBatchSampler
 from TSD.few_shot.prototypical_loss import prototypical_loss as loss_fn
 from TSD.few_shot.prototypical_loss import get_prototypes, prototypical_evaluation
 from TSD.code.parser_util import get_parser
-from TSD.code.tuh_dataset import get_data_loader
+from TSD.code.tuh_dataset import get_data, get_dataloader
 from TSD.few_shot.support_set_const import seizure_support_set, non_seizure_support_set
 from TSD.code.utils import thresh_max_f1
 from sklearn.metrics import roc_auc_score, confusion_matrix, accuracy_score, f1_score
@@ -49,11 +49,28 @@ def init_sampler(opt, labels, mode):
 
 
 def init_dataloader(opt, full_validation=False):
-    ret = get_data_loader(batch_size=2*(opt.num_support_tr + opt.num_query_tr), save_dir=opt.data_root,
-                          return_dataset=True, masking=False)
-    tr_dataset, val_dataset, test_dataset, tr_label, val_label, test_label = ret
+    # load data
+    (train_data, _, _, train_signal, train_label,
+     validation_signal, val_label, test_signal, test_label) = \
+        get_data(save_dir=opt.save_directory,
+                 balanced_data=True,
+                 return_val_test_signal=True,
+                 return_train_signal=opt.server)  # if we use the server, we have enough memory
 
-    tr_sampler = init_sampler(opt, tr_label, mode="train")
+    tr_dataset, val_dataset, test_dataset = \
+        get_dataloader(train_data=None if opt.server else train_data,
+                       val_data=None, test_data=None,
+                       train_signal=train_signal if opt.server else None,
+                       train_label=train_label,
+                       validation_signal=validation_signal, val_label=val_label,
+                       test_signal=test_signal, test_label=test_label,
+                       batch_size=2*(opt.num_support_tr + opt.num_query_tr),
+                       selected_channel_id=opt.selected_channel_id,
+                       return_dataset=True,
+                       event_base=False, masking=False,
+                       random_mask=False, remove_not_used=False)
+
+    tr_sampler = init_sampler(opt, train_label, mode="train")
     tr_dataloader = torch.utils.data.DataLoader(tr_dataset, batch_sampler=tr_sampler, num_workers=6)
     if full_validation:
         val_dataloader = torch.utils.data.DataLoader(val_dataset, batch_size=2048, num_workers=6)
@@ -112,7 +129,7 @@ def get_mask(selected_channel_id=-1):
         # Select the first 8 indices and assign 0 to the corresponding MASK elements
         MASK[indices[:8]] = 0
     else:
-        with open("../feasible_channels/feasible_8edges.json", 'r') as json_file:
+        with open("../feasible_channels/feasible_20edges.json", 'r') as json_file:
             all_feasible_channel_combination = json.load(json_file)
         present_channels = all_feasible_channel_combination[selected_channel_id]
         MASK[present_channels] = 0
@@ -142,6 +159,7 @@ def train(opt, tr_dataloader, model, optim, lr_scheduler, val_dataloader=None):
     '''
 
     device = 'cuda:0' if torch.cuda.is_available() and opt.cuda else 'cpu'
+    print("Device", device)
 
     if val_dataloader is None:
         best_state = None
@@ -339,7 +357,6 @@ def eval():
          model=model)
 
 
-
 def main():
     """
     Initialize everything and train
@@ -368,5 +385,5 @@ def main():
 
 
 if __name__ == '__main__':
-    # main()
-    eval()
+    main()
+    # eval()
