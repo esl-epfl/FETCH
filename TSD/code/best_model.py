@@ -78,11 +78,20 @@ def train(model_path=None, selected_channel_id=tuh_dataset.args.selected_channel
     scheduler = StepLR(optimizer, step_size=1, gamma=gamma)
 
     # load data
-    train_data, _, _, validation_signal, val_label, test_signal, test_label = \
-        tuh_dataset.get_data(save_dir=tuh_dataset.args.save_directory, balanced_data=True, return_signal=True)
+    (train_data, _, _,
+     train_signal, train_label,
+     validation_signal, val_label,
+     test_signal, test_label) = \
+        tuh_dataset.get_data(save_dir=tuh_dataset.args.save_directory,
+                             balanced_data=True,
+                             return_val_test_signal=True,
+                             return_train_signal=tuh_dataset.args.server)
 
     train_loader, val_loader, test_loader = \
-        tuh_dataset.get_dataloader(train_data=train_data, val_data=None, test_data=None,
+        tuh_dataset.get_dataloader(train_data=None if tuh_dataset.args.server else train_data,
+                                   val_data=None, test_data=None,
+                                   train_signal=train_signal if tuh_dataset.args.server else None,
+                                   train_label=train_label,
                                    validation_signal=validation_signal, val_label=val_label,
                                    test_signal=test_signal, test_label=test_label,
                                    batch_size=batch_size,
@@ -206,6 +215,6 @@ if __name__ == '__main__':
     print(len(channel_ids))
     # random permutation of channel_ids
     random.shuffle(channel_ids)
-
+    # 968859
     for channel_id in channel_ids[:1]:
         train(selected_channel_id=channel_id, model_path=None)

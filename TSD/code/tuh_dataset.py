@@ -208,7 +208,8 @@ def separate_and_sort_filenames(filenames):
     return sorted_lists
 
 
-def get_data(save_dir=args.save_directory, balanced_data=True, return_signal=False):
+def get_data(save_dir=args.save_directory, balanced_data=True, return_val_test_signal=False,
+             return_train_signal= False):
     # Specify the output filename
     file_lists_filename = os.path.join(args.save_directory, "./file_lists.pkl")
     if not os.path.exists(file_lists_filename):
@@ -263,7 +264,28 @@ def get_data(save_dir=args.save_directory, balanced_data=True, return_signal=Fal
     print('len(val_data): {}'.format(len(val_data)))
     print('len(test_data): {}'.format(len(test_data)))
 
-    if return_signal:
+    if return_train_signal and return_val_test_signal:
+        val_label = np.concatenate((np.zeros(len(file_lists['val']['bckg'])),
+                                    np.ones(len(file_lists['val']['seiz']))))
+        test_label = np.concatenate((np.zeros(len(file_lists['test']['bckg'])),
+                                     np.ones(len(file_lists['test']['seiz']))))
+
+        train_signal = torch.zeros((len(train_data), 20, 160, 15), dtype=torch.float)
+        validation_signal = torch.zeros((len(val_data), 20, 160, 15), dtype=torch.float)
+        test_signal = torch.zeros((len(test_data), 20, 160, 15), dtype=torch.float)
+        for input_signal, input_data_files in zip([train_signal, validation_signal, test_signal],
+                                                  [train_data, val_data, test_data]):
+            for idx in tqdm(range(len(input_data_files)), desc="Reading input files"):
+                with open(input_data_files[idx], 'rb') as f:
+                    data_pkl = pickle.load(f)
+                    input_signal[idx, :, :, :] = torch.from_numpy(np.asarray(data_pkl['STFT']))
+
+        return (train_data, val_data, test_data,
+                train_signal, train_label,
+                validation_signal, val_label,
+                test_signal, test_label)  # TODO: make a dictionary or class for returning
+
+    elif return_val_test_signal:
         val_label = np.concatenate((np.zeros(len(file_lists['val']['bckg'])),
                                     np.ones(len(file_lists['val']['seiz']))))
         test_label = np.concatenate((np.zeros(len(file_lists['test']['bckg'])),
@@ -275,22 +297,27 @@ def get_data(save_dir=args.save_directory, balanced_data=True, return_signal=Fal
             for idx in tqdm(range(len(input_data_files)), desc="Reading input files"):
                 with open(input_data_files[idx], 'rb') as f:
                     data_pkl = pickle.load(f)
-                    input_signal[idx, :,:,:] = torch.from_numpy(np.asarray(data_pkl['STFT']))
+                    input_signal[idx, :, :, :] = torch.from_numpy(np.asarray(data_pkl['STFT']))
 
-        return train_data, val_data, test_data, validation_signal, val_label, test_signal, test_label
+        return (train_data, val_data, test_data,
+                None, None,
+                validation_signal, val_label,
+                test_signal, test_label)
 
     else:
-        return train_data, val_data, test_data, None, None, None, None
+        return train_data, val_data, test_data, None, train_label, None, None, None, None
 
 
-def get_dataloader(train_data, val_data, test_data, validation_signal, val_label, test_signal, test_label,
-                    batch_size, event_base=False, random_mask=False,
-                    return_dataset=False, masking=True, remove_not_used=False,
-                    selected_channel_id = args.selected_channel_id, ):
+def get_dataloader(train_data, val_data, test_data,
+                   train_signal, train_label,
+                   validation_signal, val_label, test_signal, test_label,
+                   batch_size, event_base=False, random_mask=False,
+                   return_dataset=False, masking=True, remove_not_used=False,
+                   selected_channel_id = args.selected_channel_id, ):
 
     train_transforms = transforms.ToTensor()
 
-    val_transforms =  transforms.ToTensor()
+    val_transforms = transforms.ToTensor()
 
     test_transforms = transforms.ToTensor()
 
@@ -304,7 +331,13 @@ def get_dataloader(train_data, val_data, test_data, validation_signal, val_label
             test_data = TUHDataset(test_data, transform=test_transforms)
     else:
         # TODO: set selected channels based on json and the args.selected_channel_id
-        train_data = TUHDataset(train_data, signals=None, labels=None, transform=train_transforms,
+        if train_data is None:
+            train_data = TUHDataset(None, signals=train_signal, labels=train_label,
+                                    transform=train_transforms,
+                                    selected_channel_id=selected_channel_id,
+                                    masking=masking, remove_not_used=remove_not_used)
+        else:
+            train_data = TUHDataset(train_data, signals=None, labels=None, transform=train_transforms,
                                 selected_channel_id=selected_channel_id,
                                 masking=masking, remove_not_used=remove_not_used)
         if val_data is None:  # Using signals and labels to speedup. The drawback is that it occupies more memory in GPU
