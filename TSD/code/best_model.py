@@ -16,7 +16,8 @@ from sklearn.metrics import roc_auc_score
 from torch.optim.lr_scheduler import StepLR
 from tqdm import tqdm
 import json
-from channel_selection import double_banana, create_dataframe
+from channel_possibility import double_banana
+from utils import create_dataframe
 
 import tuh_dataset
 from vit_pytorch.vit import ViT

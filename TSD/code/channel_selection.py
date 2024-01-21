@@ -332,6 +332,9 @@ class NSGAII:
                        copy_algorithm=False,
                        verbose=True)
 
+        with open("checkpoint_resume", "wb") as f:
+            dill.dump(checkpoint, f)
+
         return res
 
 
@@ -371,7 +374,7 @@ class SteelManufacturing(ElementwiseProblem):
 def test_nsga():
     num_channels = 20
     nsga = NSGAII(num_channels)
-    res = nsga.select()
+    res = nsga.resume()
     result = pd.DataFrame(list(res.X))
     print(result)
 
