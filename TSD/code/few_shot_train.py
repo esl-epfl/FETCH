@@ -147,12 +147,13 @@ def get_mask(df=None, selected_channel_id=-1):
     return MASK
 
 
-def get_support_set():
+def get_support_set(opt):
     support_set = []
     labels = []
     for label, class_support_set in enumerate([non_seizure_support_set, seizure_support_set]):
         for filename in class_support_set:
-            filepath = os.path.join("../../TUSZv2/preprocess/task-binary_datatype-train_STFT/",
+            filepath = os.path.join(opt.save_directory,
+                                    "task-binary_datatype-train_STFT/",
                                     filename + ".pkl")
             with open(filepath, 'rb') as f:
                 data_pkl = pickle.load(f)
@@ -182,7 +183,7 @@ def train(opt, tr_dataloader, model, optim, lr_scheduler, val_dataloader=None):
     best_model_path = os.path.join(opt.experiment_root, 'best_model.pth')
     last_model_path = os.path.join(opt.experiment_root, 'last_model.pth')
 
-    x_support_set, y_support_set = get_support_set()
+    x_support_set, y_support_set = get_support_set(opt)
     x_support_set = torch.tensor(x_support_set).to(device)
     y_support_set = torch.tensor(y_support_set).to(device)
 
@@ -266,7 +267,7 @@ def test(opt, test_dataloader, val_dataloader, model):
 
     model.eval()
 
-    x_support_set, y_support_set = get_support_set()
+    x_support_set, y_support_set = get_support_set(opt)
     x_support_set = torch.tensor(x_support_set).to(device)
     y_support_set = torch.tensor(y_support_set).to(device)
 
