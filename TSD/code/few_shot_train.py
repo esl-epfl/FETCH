@@ -135,7 +135,6 @@ def get_mask(df=None, selected_channel_id=-1):
             # Take channel_list from that row
             df_sample = df.sample(n=1)
             channel_list = df_sample['channel_list'].values[0]
-            print("Channel list", channel_list)
             MASK[channel_list] = 0
 
     else:
