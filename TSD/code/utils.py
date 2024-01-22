@@ -1,5 +1,8 @@
 import numpy as np
 from sklearn.metrics import precision_recall_curve
+import pandas as pd
+import json
+from channel_possibility import double_banana
 
 
 def thresh_max_f1(y_true, y_prob):
@@ -26,6 +29,15 @@ def thresh_max_f1(y_true, y_prob):
     return np.float(best_thresh)
 
 
+def load_json(num_channels):
+    with open(f"../feasible_channels/feasible_{num_channels}edges.json", 'r') as json_file:
+        selected_channels = json.load(json_file)
+
+    # the json file is a list of lists, each list is a set of channels
+    # example: [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+    return selected_channels
+
+
 def create_dataframe(num_channels):
     """
     # return a dataframe with five columns:
@@ -48,3 +60,12 @@ def create_dataframe(num_channels):
     df['num_channels_wearable'] = df['channel_list'].apply(lambda x: len(x))
     # print(df.sample(n=5))
     return df
+
+
+def channel_list_to_node_set(x):
+    node_set = set()
+    edge_lists = [double_banana[a] for a in x]
+    for node1, node2 in edge_lists:
+        node_set.add(node1)
+        node_set.add(node2)
+    return len(node_set)

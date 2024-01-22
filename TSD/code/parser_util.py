@@ -97,5 +97,6 @@ def get_parser():
     parser.add_argument('--selected_channel_id', type=int, default=-1)
     parser.add_argument('--global_model', action='store_true', help='enables global model')
     parser.add_argument('--server', action='store_true', help='enables server mode -> use more memory')
+    parser.add_argument('--num_nodes', type=int, default=-1, help="number of nodes in EEG")
 
     return parser

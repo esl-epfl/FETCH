@@ -14,6 +14,7 @@ from TSD.code.parser_util import get_parser
 from TSD.code.tuh_dataset import get_data, get_dataloader
 from TSD.few_shot.support_set_const import seizure_support_set, non_seizure_support_set
 from TSD.code.utils import thresh_max_f1
+from TSD.code.utils import create_dataframe, channel_list_to_node_set
 from sklearn.metrics import roc_auc_score, confusion_matrix, accuracy_score, f1_score
 
 from tqdm import tqdm
@@ -117,17 +118,26 @@ def save_list_to_file(path, thelist):
             f.write("%s\n" % item)
 
 
-def get_mask(selected_channel_id=-1):
+def get_mask(df=None, selected_channel_id=-1):
     MASK = np.ones(20, dtype=np.bool)
 
     if selected_channel_id == -1:
-        # Create a list of indices
-        indices = np.arange(20)
-        # Randomly shuffle the indices
-        indices = indices[np.random.permutation(20)]
+        if df is None:
+            # Create a list of indices
+            indices = np.arange(20)
+            # Randomly shuffle the indices
+            indices = indices[np.random.permutation(20)]
 
-        # Select the first 8 indices and assign 0 to the corresponding MASK elements
-        MASK[indices[:8]] = 0
+            # Select the first 8 indices and assign 0 to the corresponding MASK elements
+            MASK[indices[:8]] = 0
+        else:
+            # Choose a random row from the dataframe
+            # Take channel_list from that row
+            df_sample = df.sample(n=1)
+            channel_list = df_sample['channel_list'].values[0]
+            print("Channel list", channel_list)
+            MASK[channel_list] = 0
+
     else:
         with open("../feasible_channels/feasible_20edges.json", 'r') as json_file:
             all_feasible_channel_combination = json.load(json_file)
@@ -176,6 +186,10 @@ def train(opt, tr_dataloader, model, optim, lr_scheduler, val_dataloader=None):
     x_support_set = torch.tensor(x_support_set).to(device)
     y_support_set = torch.tensor(y_support_set).to(device)
 
+    df = create_dataframe(20)
+    df['number_nodes'] = df['channel_list'].apply(channel_list_to_node_set)
+    df_num_nodes = df[df['number_nodes'] == opt.num_nodes]
+
     for epoch in range(opt.epochs):
         print('=== Epoch: {} ==='.format(epoch))
         tr_iter = iter(tr_dataloader)
@@ -188,7 +202,7 @@ def train(opt, tr_dataloader, model, optim, lr_scheduler, val_dataloader=None):
             x = torch.concatenate((x_support_set, x_query_set))
             y = torch.concatenate((y_support_set, y_query_set))
 
-            mask = get_mask()
+            mask = get_mask(df=df_num_nodes)
             x[:, mask, :, :] = -1  # mask the channels
             x = x.reshape((x.shape[0], 1, -1, x.shape[3]))
 
@@ -214,7 +228,7 @@ def train(opt, tr_dataloader, model, optim, lr_scheduler, val_dataloader=None):
             x = torch.concatenate((x_support_set, x_query_set))
             y = torch.concatenate((y_support_set, y_query_set))
 
-            mask = get_mask()
+            mask = get_mask(df = df_num_nodes)
             x[:, mask, :, :] = -1  # mask the channels
             x = x.reshape((x.shape[0], 1, -1, x.shape[3]))
 
@@ -312,7 +326,7 @@ def test(opt, test_dataloader, val_dataloader, model):
     test_predict_all = np.where(predict_prob > best_th, 1, 0)
     test_time = time.time() - start_time - validation_time
 
-    with open("../feasible_channels/feasible_8edges.json", 'r') as json_file:
+    with open("../feasible_channels/feasible_20edges.json", 'r') as json_file:
         selected_channels = json.load(json_file)[opt.selected_channel_id]
     # Placeholder for results
     results = {

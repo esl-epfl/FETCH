@@ -249,12 +249,13 @@ def get_data(save_dir=args.save_directory, balanced_data=True, return_val_test_s
         train_data = file_lists['train']['bckg'] + file_lists['train']['seiz'] * \
                      int(len(file_lists['train']['bckg']) / len(file_lists['train']['seiz']))
         seizure_labels = np.ones(len(file_lists['train']['seiz']) *
-                                 int(len(file_lists['train']['bckg']) / len(file_lists['train']['seiz'])))
+                                 int(len(file_lists['train']['bckg']) / len(file_lists['train']['seiz']))
+                                 , dtype=np.int32)
     else:
         train_data = file_lists['train']['bckg'] + file_lists['train']['seiz']
-        seizure_labels = np.ones(len(file_lists['train']['seiz']))
+        seizure_labels = np.ones(len(file_lists['train']['seiz']), dtype=np.int32)
 
-    non_seizure_labels = np.zeros(len(file_lists['train']['bckg']))
+    non_seizure_labels = np.zeros(len(file_lists['train']['bckg']), dtype=np.int32)
     train_label = np.concatenate((non_seizure_labels, seizure_labels))
     print('len(train_data): {}'.format(len(train_data)))
 
