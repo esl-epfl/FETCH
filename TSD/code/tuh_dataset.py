@@ -301,7 +301,7 @@ def get_data(save_dir=args.save_directory, balanced_data=True, return_val_test_s
                     input_signal[idx, :, :, :] = torch.from_numpy(np.asarray(data_pkl['STFT']))
 
         return (train_data, val_data, test_data,
-                None, None,
+                None, train_label,
                 validation_signal, val_label,
                 test_signal, test_label)
 
