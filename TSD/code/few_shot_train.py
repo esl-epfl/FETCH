@@ -119,7 +119,7 @@ def save_list_to_file(path, thelist):
 
 
 def get_mask(df=None, selected_channel_id=-1):
-    MASK = np.ones(20, dtype=np.bool)
+    MASK = np.ones(20, dtype=np.int32)
 
     if selected_channel_id == -1:
         if df is None:
@@ -182,6 +182,7 @@ def train(opt, tr_dataloader, model, optim, lr_scheduler, val_dataloader=None):
 
     best_model_path = os.path.join(opt.experiment_root, 'best_model.pth')
     last_model_path = os.path.join(opt.experiment_root, 'last_model.pth')
+    best_state = model.state_dict()
 
     x_support_set, y_support_set = get_support_set(opt)
     x_support_set = torch.tensor(x_support_set).to(device)
@@ -190,6 +191,7 @@ def train(opt, tr_dataloader, model, optim, lr_scheduler, val_dataloader=None):
     df = create_dataframe(20)
     df['number_nodes'] = df['channel_list'].apply(channel_list_to_node_set)
     df_num_nodes = df[df['number_nodes'] == opt.num_nodes]
+    print("df_num_nodes", df_num_nodes.sample(n=5))
 
     for epoch in range(opt.epochs):
         print('=== Epoch: {} ==='.format(epoch))
@@ -200,8 +202,9 @@ def train(opt, tr_dataloader, model, optim, lr_scheduler, val_dataloader=None):
             x_query_set, y_query_set = batch
             x_query_set, y_query_set = x_query_set.to(device), y_query_set.to(device)
 
-            x = torch.concatenate((x_support_set, x_query_set))
-            y = torch.concatenate((y_support_set, y_query_set))
+            # concatenate the support set and query set
+            x = torch.cat((x_support_set, x_query_set))
+            y = torch.cat((y_support_set, y_query_set))
 
             mask = get_mask(df=df_num_nodes)
             x[:, mask, :, :] = -1  # mask the channels
@@ -226,8 +229,8 @@ def train(opt, tr_dataloader, model, optim, lr_scheduler, val_dataloader=None):
             x_query_set, y_query_set = batch
             x_query_set, y_query_set = x_query_set.to(device), y_query_set.to(device)
 
-            x = torch.concatenate((x_support_set, x_query_set))
-            y = torch.concatenate((y_support_set, y_query_set))
+            x = torch.cat((x_support_set, x_query_set))
+            y = torch.cat((y_support_set, y_query_set))
 
             mask = get_mask(df = df_num_nodes)
             x[:, mask, :, :] = -1  # mask the channels
