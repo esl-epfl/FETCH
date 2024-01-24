@@ -1,5 +1,7 @@
 import os
 
+import pandas as pd
+
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 import random
 import warnings
@@ -54,7 +56,7 @@ def train(model_path=None, selected_channel_id=tuh_dataset.args.selected_channel
             # num of channels based on selected_channel_id
             num_channels = len(channel_set)
         print(f"Number of channels: {num_channels}")
-        model = ViT(image_size=(160*num_channels, 15), patch_size=(80, 5), num_classes=1,
+        model = ViT(image_size=(160 * num_channels, 15), patch_size=(80, 5), num_classes=1,
                     dim=16, depth=4, heads=4, mlp_dim=4, pool='cls',
                     channels=1, dim_head=4, dropout=0.2, emb_dropout=0.2).to(device)
     else:
@@ -202,7 +204,7 @@ def inference(model_path,
               validation_signal, val_label,
               test_signal, test_label,
               selected_channel_id=tuh_dataset.args.selected_channel_id,
-             ):
+              ):
     seed_everything()
     model = torch.load(model_path, map_location=torch.device(device))
     sigmoid = nn.Sigmoid()
@@ -257,14 +259,16 @@ def inference(model_path,
     return val_auc, test_auc
 
 
+def channel_list_to_node_set(x):
+    node_set = set()
+    edge_lists = [double_banana[a] for a in x]
+    for node1, node2 in edge_lists:
+        node_set.add(node1)
+        node_set.add(node2)
+    return len(node_set)
+
+
 def get_feasible_ids_with_num_nodes(num_nodes):
-    def channel_list_to_node_set(x):
-        node_set = set()
-        edge_lists = [double_banana[a] for a in x]
-        for node1, node2 in edge_lists:
-            node_set.add(node1)
-            node_set.add(node2)
-        return len(node_set)
     df = create_dataframe(20)
     df['number_nodes'] = df['channel_list'].apply(channel_list_to_node_set)
     df_num_nodes = df[df['number_nodes'] == num_nodes]
@@ -298,14 +302,12 @@ def inference_scratch_models():
     # x is the experiment name, and y is the channel_id
     # x can be SBS, SFS, scratch, or NSGA2
 
-    # Create the dataframe
-    df = create_dataframe(20)
-    # add three columns to the dataframe as Validation AUC, and Test AUC, and experiment name
-    # The experiment name is a list that can have several experiments
-    df['val_auc'] = np.nan
-    df['test_auc'] = np.nan
-    df['experiment_name'] = np.nan
-    df['model_name'] = np.nan
+    # create a new dataframe with columns as Validation AUC, and Test AUC, experiment name,
+    # model name, and number of nodes
+    scratch_df = pd.DataFrame(
+        columns=['channel_id', 'val_auc', 'test_auc', 'experiment_name', 'model_name', 'number_nodes'])
+    full_df = create_dataframe(20)
+    full_df['number_nodes'] = full_df['channel_list'].apply(channel_list_to_node_set)
 
     # iterate over the model directories
     for model_dir in model_dirs:
@@ -336,20 +338,18 @@ def inference_scratch_models():
                                       validation_signal=validation_signal, val_label=val_label,
                                       test_signal=test_signal, test_label=test_label,
                                       selected_channel_id=int(channel_id))
-        # update the dataframe
-        df.loc[df['channel_id'] == int(channel_id), 'val_auc'] = val_auc
-        df.loc[df['channel_id'] == int(channel_id), 'test_auc'] = test_auc
-        # If the experiment name is nan for this specific row, create a list and add the experiment name
-        # Otherwise, append the experiment name to the list
-        if np.isnan(df.loc[df['channel_id'] == int(channel_id), 'experiment_name'].values[0]):
-            df.loc[df['channel_id'] == int(channel_id), 'experiment_name'] = [experiment_name]
-        else:
-            df.loc[df['channel_id'] == int(channel_id), 'experiment_name'] += [experiment_name]
-
-        df.loc[df['channel_id'] == int(channel_id), 'model_name'] = model_name
+        # add the results as a new row to the dataframe
+        number_nodes = full_df[full_df['channel_id'] == int(channel_id)]['number_nodes'].values[0]
+        scratch_df = scratch_df.append({'channel_id': channel_id,
+                                        'val_auc': val_auc,
+                                        'test_auc': test_auc,
+                                        'experiment_name': experiment_name,
+                                        'model_name': model_name,
+                                        'number_nodes': number_nodes},
+                                       ignore_index=True)
 
     # save the updated df
-    df.to_csv(os.path.join(save_directory, 'scratch_models.csv'))
+    scratch_df.to_csv(os.path.join(save_directory, 'scratch_models.csv'))
 
 
 if __name__ == '__main__':
