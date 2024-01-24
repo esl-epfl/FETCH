@@ -197,7 +197,12 @@ def train(model_path=None, selected_channel_id=tuh_dataset.args.selected_channel
     return best_val_auc
 
 
-def inference(model_path, selected_channel_id=tuh_dataset.args.selected_channel_id):
+def inference(model_path,
+              train_data,
+              validation_signal, val_label,
+              test_signal, test_label,
+              selected_channel_id=tuh_dataset.args.selected_channel_id,
+             ):
     seed_everything()
     model = torch.load(model_path, map_location=torch.device(device))
     sigmoid = nn.Sigmoid()
@@ -207,14 +212,6 @@ def inference(model_path, selected_channel_id=tuh_dataset.args.selected_channel_
     lr = 3e-5
     gamma = 0.7
     tuh_dataset.args.eeg_type = 'stft'
-    # get data
-    (train_data, _, _, _, _,
-     validation_signal, val_label,
-     test_signal, test_label) = \
-        tuh_dataset.get_data(save_dir=tuh_dataset.args.save_directory,
-                             balanced_data=True,
-                             return_val_test_signal=True,
-                             return_train_signal=False)
 
     _, val_loader, test_loader = \
         tuh_dataset.get_dataloader(train_data=train_data,
@@ -284,6 +281,15 @@ def train_scratch_models():
 
 
 def inference_scratch_models():
+    # get data
+    (train_data, _, _, _, _,
+     validation_signal, val_label,
+     test_signal, test_label) = \
+        tuh_dataset.get_data(save_dir=tuh_dataset.args.save_directory,
+                             balanced_data=True,
+                             return_val_test_signal=True,
+                             return_train_signal=False)
+
     save_directory = tuh_dataset.args.save_directory
     # Read all the directories in save_directory
     model_dirs = [os.path.join(save_directory, d) for d in os.listdir(save_directory)
@@ -322,7 +328,13 @@ def inference_scratch_models():
         model_name = [name for name in model_names if int(name.split('_')[1]) == best_epoch_number][0]
         best_model_path = os.path.join(model_dir, model_name)
         # get the validation and test AUC
-        val_auc, test_auc = inference(model_path=best_model_path, selected_channel_id=int(channel_id))
+        # val_auc, test_auc = inference(model_path=best_model_path,
+        #                               selected_channel_id=int(channel_id))
+        val_auc, test_auc = inference(model_path=best_model_path,
+                                      train_data=train_data,
+                                      validation_signal=validation_signal, val_label=val_label,
+                                      test_signal=test_signal, test_label=test_label,
+                                      selected_channel_id=int(channel_id))
         # update the dataframe
         df.loc[df['channel_id'] == int(channel_id), 'val_auc'] = val_auc
         df.loc[df['channel_id'] == int(channel_id), 'test_auc'] = test_auc
