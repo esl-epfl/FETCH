@@ -302,8 +302,12 @@ def inference_scratch_models():
 
     # iterate over the model directories
     for model_dir in model_dirs:
+        if len(model_dir.split('/')[-1].split('_')) != 3:
+            continue
         # get the experiment name and channel_id
         experiment_name = model_dir.split('/')[-1].split('_')[1]
+        if experiment_name not in ['scratch', 'SBS', 'SFS', 'NSGA']:
+            continue
         channel_id = model_dir.split('/')[-1].split('_')[2]
 
         # get the model path for the best model
@@ -334,4 +338,4 @@ def inference_scratch_models():
 
 
 if __name__ == '__main__':
-    train_scratch_models()
+    inference_scratch_models()
