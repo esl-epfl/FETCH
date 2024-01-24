@@ -340,13 +340,14 @@ def inference_scratch_models():
                                       selected_channel_id=int(channel_id))
         # add the results as a new row to the dataframe
         number_nodes = full_df[full_df['channel_id'] == int(channel_id)]['number_nodes'].values[0]
-        scratch_df = scratch_df.append({'channel_id': channel_id,
-                                        'val_auc': val_auc,
-                                        'test_auc': test_auc,
-                                        'experiment_name': experiment_name,
-                                        'model_name': model_name,
-                                        'number_nodes': number_nodes},
-                                       ignore_index=True)
+        scratch_df = pd.concat([scratch_df,
+                                pd.DataFrame({'channel_id': [channel_id],
+                                              'val_auc': [val_auc],
+                                              'test_auc': [test_auc],
+                                              'experiment_name': [experiment_name],
+                                              'model_name': [model_name],
+                                              'number_nodes': [number_nodes]})],
+                               ignore_index=True)
 
     # save the updated df
     scratch_df.to_csv(os.path.join(save_directory, 'scratch_models.csv'))
