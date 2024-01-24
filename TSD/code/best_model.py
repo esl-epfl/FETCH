@@ -305,6 +305,7 @@ def inference_scratch_models():
     df['val_auc'] = np.nan
     df['test_auc'] = np.nan
     df['experiment_name'] = np.nan
+    df['model_name'] = np.nan
 
     # iterate over the model directories
     for model_dir in model_dirs:
@@ -344,6 +345,8 @@ def inference_scratch_models():
             df.loc[df['channel_id'] == int(channel_id), 'experiment_name'] = [experiment_name]
         else:
             df.loc[df['channel_id'] == int(channel_id), 'experiment_name'] += [experiment_name]
+
+        df.loc[df['channel_id'] == int(channel_id), 'model_name'] = model_name
 
     # save the updated df
     df.to_csv(os.path.join(save_directory, 'scratch_models.csv'))
