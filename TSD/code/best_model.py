@@ -197,6 +197,69 @@ def train(model_path=None, selected_channel_id=tuh_dataset.args.selected_channel
     return best_val_auc
 
 
+def inference(model_path, selected_channel_id=tuh_dataset.args.selected_channel_id):
+    seed_everything()
+    model = torch.load(model_path, map_location=torch.device(device))
+    sigmoid = nn.Sigmoid()
+
+    # Training settings
+    batch_size = 256
+    lr = 3e-5
+    gamma = 0.7
+    tuh_dataset.args.eeg_type = 'stft'
+    # get data
+    (train_data, _, _, _, _,
+     validation_signal, val_label,
+     test_signal, test_label) = \
+        tuh_dataset.get_data(save_dir=tuh_dataset.args.save_directory,
+                             balanced_data=True,
+                             return_val_test_signal=True,
+                             return_train_signal=False)
+
+    _, val_loader, test_loader = \
+        tuh_dataset.get_dataloader(train_data=train_data,
+                                   train_signal=None, train_label=None,
+                                   val_data=None, test_data=None,
+                                   validation_signal=validation_signal, val_label=val_label,
+                                   test_signal=test_signal, test_label=test_label,
+                                   batch_size=batch_size,
+                                   selected_channel_id=selected_channel_id,
+                                   return_dataset=False,
+                                   event_base=False, masking=False, random_mask=False,
+                                   remove_not_used=True)
+
+    model.eval()
+    val_label_all = []
+    val_prob_all = []
+    with torch.no_grad():
+        for data, label in tqdm(val_loader, desc='Evaluation '):
+            val_label_all.extend(label)
+
+            data = data.to(device)
+            val_prob = model(data)
+            val_prob_sigmoid = torch.squeeze(sigmoid(val_prob))
+            val_prob_all.extend(val_prob_sigmoid.cpu().numpy())
+
+    val_auc = roc_auc_score(val_label_all, val_prob_all)
+
+    print(f"val_auc: {val_auc:.4f}")
+
+    test_label_all = []
+    test_prob_all = []
+    with torch.no_grad():
+        for data, label in tqdm(test_loader, desc='Testing '):
+            test_label_all.extend(label)
+
+            data = data.to(device)
+            test_prob = model(data)
+            test_prob_sigmoid = torch.squeeze(sigmoid(test_prob))
+            test_prob_all.extend(test_prob_sigmoid.cpu().numpy())
+
+    test_auc = roc_auc_score(test_label_all, test_prob_all)
+    print(f"test_auc: {test_auc:.4f}")
+    return val_auc, test_auc
+
+
 def get_feasible_ids_with_num_nodes(num_nodes):
     def channel_list_to_node_set(x):
         node_set = set()
@@ -211,11 +274,64 @@ def get_feasible_ids_with_num_nodes(num_nodes):
     return df_num_nodes['channel_id'].tolist()
 
 
-if __name__ == '__main__':
-    channel_ids = get_feasible_ids_with_num_nodes(8)
+def train_scratch_models():
+    channel_ids = get_feasible_ids_with_num_nodes(4)
     print(len(channel_ids))
     # random permutation of channel_ids
     random.shuffle(channel_ids)
-    # 968859
-    for channel_id in channel_ids[:1]:
+    for channel_id in channel_ids[:100]:
         train(selected_channel_id=channel_id, model_path=None)
+
+
+def inference_scratch_models():
+    save_directory = tuh_dataset.args.save_directory
+    # Read all the directories in save_directory
+    model_dirs = [os.path.join(save_directory, d) for d in os.listdir(save_directory)
+                  if os.path.isdir(os.path.join(save_directory, d))]
+    # filter the directories based on their name test_x_y
+    # x is the experiment name, and y is the channel_id
+    # x can be SBS, SFS, scratch, or NSGA2
+
+    # Create the dataframe
+    df = create_dataframe(20)
+    # add three columns to the dataframe as Validation AUC, and Test AUC, and experiment name
+    # The experiment name is a list that can have several experiments
+    df['val_auc'] = np.nan
+    df['test_auc'] = np.nan
+    df['experiment_name'] = np.nan
+
+    # iterate over the model directories
+    for model_dir in model_dirs:
+        # get the experiment name and channel_id
+        experiment_name = model_dir.split('/')[-1].split('_')[1]
+        channel_id = model_dir.split('/')[-1].split('_')[2]
+
+        # get the model path for the best model
+        # The model name is similar to model_x_0.7952, where x is the epoch number
+        # We need to find the largest number of x as the best model
+        model_names = [name for name in os.listdir(model_dir) if name.startswith('model')]
+        # get the epoch number
+        epoch_numbers = [int(name.split('_')[1]) for name in model_names]
+        # get the best epoch number
+        best_epoch_number = max(epoch_numbers)
+        # get the complete model name based on the best epoch number
+        model_name = [name for name in model_names if int(name.split('_')[1]) == best_epoch_number][0]
+        best_model_path = os.path.join(model_dir, model_name)
+        # get the validation and test AUC
+        val_auc, test_auc = inference(model_path=best_model_path, selected_channel_id=int(channel_id))
+        # update the dataframe
+        df.loc[df['channel_id'] == int(channel_id), 'val_auc'] = val_auc
+        df.loc[df['channel_id'] == int(channel_id), 'test_auc'] = test_auc
+        # If the experiment name is nan for this specific row, create a list and add the experiment name
+        # Otherwise, append the experiment name to the list
+        if np.isnan(df.loc[df['channel_id'] == int(channel_id), 'experiment_name'].values[0]):
+            df.loc[df['channel_id'] == int(channel_id), 'experiment_name'] = [experiment_name]
+        else:
+            df.loc[df['channel_id'] == int(channel_id), 'experiment_name'] += [experiment_name]
+
+    # save the updated df
+    df.to_csv(os.path.join(save_directory, 'scratch_models.csv'))
+
+
+if __name__ == '__main__':
+    train_scratch_models()
