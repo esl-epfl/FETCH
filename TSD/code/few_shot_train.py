@@ -15,10 +15,12 @@ from TSD.code.tuh_dataset import get_data, get_dataloader
 from TSD.few_shot.support_set_const import seizure_support_set, non_seizure_support_set
 from TSD.code.utils import thresh_max_f1
 from TSD.code.utils import create_dataframe, channel_list_to_node_set
+from TSD.code.utils import get_feasible_ids_with_num_nodes
 from sklearn.metrics import roc_auc_score, confusion_matrix, accuracy_score, f1_score
 
 from tqdm import tqdm
 import numpy as np
+import pandas as pd
 import torch
 import os
 from vit_pytorch.vit import ViT
@@ -65,7 +67,7 @@ def init_dataloader(opt, full_validation=False):
                        train_label=train_label,
                        validation_signal=validation_signal, val_label=val_label,
                        test_signal=test_signal, test_label=test_label,
-                       batch_size=2*(opt.num_support_tr + opt.num_query_tr),
+                       batch_size=2 * (opt.num_support_tr + opt.num_query_tr),
                        selected_channel_id=opt.selected_channel_id,
                        return_dataset=True,
                        event_base=False, masking=False,
@@ -138,10 +140,15 @@ def get_mask(df=None, selected_channel_id=-1):
             MASK[channel_list] = 0
 
     else:
-        with open("../feasible_channels/feasible_20edges.json", 'r') as json_file:
-            all_feasible_channel_combination = json.load(json_file)
-        present_channels = all_feasible_channel_combination[selected_channel_id]
-        MASK[present_channels] = 0
+        if df is None:
+            with open("../feasible_channels/feasible_20edges.json", 'r') as json_file:
+                all_feasible_channel_combination = json.load(json_file)
+            present_channels = all_feasible_channel_combination[selected_channel_id]
+            MASK[present_channels] = 0
+        else:
+            df_sample = df[df['channel_id'] == selected_channel_id]
+            channel_list = df_sample['channel_list'].values[0]
+            MASK[channel_list] = 0
 
     return MASK
 
@@ -231,7 +238,7 @@ def train(opt, tr_dataloader, model, optim, lr_scheduler, val_dataloader=None):
             x = torch.cat((x_support_set, x_query_set))
             y = torch.cat((y_support_set, y_query_set))
 
-            mask = get_mask(df = df_num_nodes)
+            mask = get_mask(df=df_num_nodes)
             x[:, mask, :, :] = -1  # mask the channels
             x = x.reshape((x.shape[0], 1, -1, x.shape[3]))
 
@@ -260,26 +267,24 @@ def train(opt, tr_dataloader, model, optim, lr_scheduler, val_dataloader=None):
     return best_state, best_acc, train_loss, train_acc, val_loss, val_acc
 
 
-def test(opt, test_dataloader, val_dataloader, model):
+def test(opt, test_dataloader, val_dataloader, model, device,
+         df, selected_channel_id):
     """
     Test the model trained with the prototypical learning algorithm
     """
-    device = 'cuda:0' if torch.cuda.is_available() and opt.cuda else 'cpu'
-    start_time = time.time()
 
     model.eval()
 
-    x_support_set, y_support_set = get_support_set(opt)
+    x_support_set, y_support_set = get_support_set(opt)  # TODO: move this to the main function
     x_support_set = torch.tensor(x_support_set).to(device)
     y_support_set = torch.tensor(y_support_set).to(device)
 
-    mask = get_mask(selected_channel_id=opt.selected_channel_id)
+    mask = get_mask(df=df, selected_channel_id=selected_channel_id)
     x_support_set[:, mask, :, :] = -1  # mask the channels
     x = x_support_set.reshape((x_support_set.shape[0], 1, -1, x_support_set.shape[3]))
     model_output = model(x)
 
     prototypes = get_prototypes(model_output, target=y_support_set).to(device)
-    mask = get_mask(selected_channel_id=opt.selected_channel_id)
 
     val_prob_all = torch.zeros(len(val_dataloader.dataset), dtype=torch.float32).to(device)
     val_label_all = torch.zeros(len(val_dataloader.dataset), dtype=torch.int).to(device)
@@ -300,14 +305,10 @@ def test(opt, test_dataloader, val_dataloader, model):
 
     val_label_all = val_label_all.cpu().numpy()
     val_prob_all = val_prob_all.cpu().numpy()
-    best_th = thresh_max_f1(val_label_all, val_prob_all)
-    print("Best Threshold", best_th)
-    validation_time = time.time() - start_time
+    val_auc = roc_auc_score(val_label_all, val_prob_all)
 
     predict_prob = torch.zeros(len(test_dataloader.dataset), dtype=torch.float32).to(device)
     true_label = torch.zeros(len(test_dataloader.dataset), dtype=torch.int).to(device)
-
-    mask = get_mask(selected_channel_id=opt.selected_channel_id)
 
     for i, batch in enumerate(tqdm(test_dataloader)):
         x, y = batch
@@ -326,31 +327,9 @@ def test(opt, test_dataloader, val_dataloader, model):
 
     predict_prob = predict_prob.cpu().numpy()
     true_label = true_label.cpu().numpy()
-    test_predict_all = np.where(predict_prob > best_th, 1, 0)
-    test_time = time.time() - start_time - validation_time
+    test_auc = roc_auc_score(true_label, predict_prob)
 
-    with open("../feasible_channels/feasible_20edges.json", 'r') as json_file:
-        selected_channels = json.load(json_file)[opt.selected_channel_id]
-    # Placeholder for results
-    results = {
-        "selected_channel_id": opt.selected_channel_id,
-        "selected_channels": selected_channels,
-        "best_threshold": best_th,
-        "accuracy": accuracy_score(true_label, test_predict_all),
-        "f1_score": f1_score(true_label, test_predict_all),
-        "auc": roc_auc_score(true_label, predict_prob),
-        "val_auc": roc_auc_score(val_label_all, val_prob_all),
-        "validation_time": validation_time,
-        "test_time": test_time,
-        "confusion_matrix": confusion_matrix(true_label, test_predict_all).tolist()
-    }
-
-    # Save results to a JSON file
-    output_filename = "../results/results_channel_adaptation_{}.json".format(opt.selected_channel_id)
-    with open(output_filename, "w") as json_file:
-        json.dump(results, json_file, indent=4)
-
-    return
+    return val_auc, test_auc
 
 
 def eval():
@@ -358,6 +337,12 @@ def eval():
     Initialize everything and train
     """
     options = get_parser().parse_args()
+    num_nodes = options.num_nodes
+    df = get_feasible_ids_with_num_nodes(num_nodes)
+
+    # Create a dataframe to store the results
+    results_df = pd.DataFrame(columns=['channel_id', 'val_auc', 'test_auc',
+                                       'experiment_name', 'model_name', 'number_nodes'])
 
     if torch.cuda.is_available() and not options.cuda:
         print("WARNING: You have a CUDA device, so you should probably run with --cuda")
@@ -365,13 +350,41 @@ def eval():
     init_seed(options)
     tr_dataloader, val_dataloader, test_dataloader = init_dataloader(options, full_validation=True)
     model = init_vit(options)
-    model_path = os.path.join(options.experiment_root, 'best_model.pth')
+    model_path = os.path.join(options.experiment_root, 'model_{}nodes'.format(num_nodes),
+                              'best_model.pth')
     model.load_state_dict(torch.load(model_path))
 
-    test(opt=options,
-         test_dataloader=test_dataloader,
-         val_dataloader=val_dataloader,
-         model=model)
+    device = 'cuda:0' if torch.cuda.is_available() and options.cuda else 'cpu'
+    print("Device", device)
+
+    # iterate over all rows of the dataframe
+    for index, row in df.iterrows():
+        selected_channel_id = row['channel_id']
+        selected_channels = row['channel_list']
+
+        val_auc, test_auc = test(opt=options,
+                                 test_dataloader=test_dataloader,
+                                 val_dataloader=val_dataloader,
+                                 model=model,
+                                 df=df,
+                                 device=device,
+                                 selected_channel_id=selected_channel_id, )
+        print("val_auc: ", val_auc)
+        print("test_auc: ", test_auc)
+        print("------------------------------------------------------")
+        results = {'channel_id': selected_channel_id,
+                   'val_auc': val_auc,
+                   'test_auc': test_auc,
+                   'experiment_name': 'FETCH',
+                   'model_name': 'model_{}nodes'.format(num_nodes),
+                   'number_nodes': num_nodes}
+        # Concatenate the results
+        results_df = pd.concat([results_df, pd.DataFrame(results)], ignore_index=True)
+
+        # Save the results
+    results_df.to_csv(os.path.join(options.experiment_root,
+                                   'model_{}nodes'.format(num_nodes),
+                                   'results.csv'), index=False)
 
 
 def main():
@@ -402,5 +415,5 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
-    # eval()
+    # main()
+    eval()
