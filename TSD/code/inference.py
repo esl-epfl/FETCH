@@ -4,6 +4,8 @@ import math
 import json
 import warnings
 
+import pandas as pd
+
 # Filter out the specific UserWarning related to torchvision
 warnings.filterwarnings("ignore", category=UserWarning, message="Failed to load image Python extension")
 # TODO solve the CUDA version issue
@@ -18,10 +20,13 @@ import numpy as np
 from tqdm import tqdm
 from tuh_dataset import get_dataloader, get_data
 import torch.multiprocessing
+
 torch.multiprocessing.set_sharing_strategy('file_system')
 from sklearn.metrics import confusion_matrix
 from tuh_dataset import args as tuh_args
 from TSD.code.utils import thresh_max_f1
+from TSD.code.utils import get_feasible_ids_with_num_nodes
+from TSD.code.utils import create_dataframe
 
 
 def seed_everything(seed=99):
@@ -37,14 +42,24 @@ def seed_everything(seed=99):
 seed_everything(seed=99)
 
 
-def test_sample_base(selected_channel_id=tuh_args.selected_channel_id):
-    start_time = time.time()
-    _, val_loader, test_loader = get_dataloader(train_data=train_data, val_data=None, test_data=None,
-                                                validation_signal=validation_signal, val_label=val_label,
-                                                test_signal=test_signal, test_label=test_label,
-                                                batch_size=128,
-                                                selected_channel_id=selected_channel_id,
-                                                event_base=False, remove_not_used=False)
+def inference(df, train_data, validation_signal, val_label, test_signal, test_label,
+              device, model, sigmoid,
+              selected_channel_id=tuh_args.selected_channel_id):
+
+    selected_channels = df[df['channel_id'] == selected_channel_id]['channel_list'].values[0]
+    print("selected_channels: ", selected_channels)
+
+    _, val_loader, test_loader = \
+        get_dataloader(train_data=train_data,
+                       train_signal=None, train_label=None,
+                       val_data=None, test_data=None,
+                       validation_signal=validation_signal, val_label=val_label,
+                       test_signal=test_signal, test_label=test_label,
+                       batch_size=128,
+                       selected_channel_id=selected_channel_id,
+                       return_dataset=False,
+                       event_base=False, masking=True, random_mask=False,
+                       remove_not_used=False)
 
     val_label_all = torch.zeros(len(val_loader.dataset), dtype=torch.int).to(device)
     val_prob_all = torch.zeros(len(val_loader.dataset), dtype=torch.float).to(device)
@@ -60,8 +75,8 @@ def test_sample_base(selected_channel_id=tuh_args.selected_channel_id):
 
     val_label_all = val_label_all.cpu().numpy()
     val_prob_all = val_prob_all.cpu().numpy()
-    best_th = thresh_max_f1(val_label_all, val_prob_all)
-    validation_time = time.time() - start_time
+
+    val_auc = roc_auc_score(val_label_all, val_prob_all)
 
     test_label_all = torch.zeros(len(test_loader.dataset), dtype=torch.int).to(device)
     test_prob_all = torch.zeros(len(test_loader.dataset), dtype=torch.float).to(device)
@@ -79,31 +94,8 @@ def test_sample_base(selected_channel_id=tuh_args.selected_channel_id):
     test_label_all = test_label_all.cpu().numpy()
     test_prob_all = test_prob_all.cpu().numpy()
 
-    test_predict_all = np.where(test_prob_all > best_th, 1, 0)
-    test_time = time.time() - start_time - validation_time
-
-    with open("../feasible_channels/feasible_8edges.json", 'r') as json_file:
-        selected_channels = json.load(json_file)[selected_channel_id]
-    # Placeholder for results
-    results = {
-        "selected_channel_id": selected_channel_id,
-        "selected_channels": selected_channels,
-        "best_threshold": best_th,
-        "accuracy": accuracy_score(test_label_all, test_predict_all),
-        "f1_score": f1_score(test_label_all, test_predict_all),
-        "auc": roc_auc_score(test_label_all, test_prob_all),
-        "val_auc": roc_auc_score(val_label_all, val_prob_all),
-        "validation_time": validation_time,
-        "test_time": test_time,
-        "confusion_matrix": confusion_matrix(test_label_all, test_predict_all).tolist()
-    }
-
-    # Save results to a JSON file
-    output_filename = "../results/results_{}_{}.json".format("global" if tuh_args.global_model
-                                                                              else "Channel_specific",
-                                                                              selected_channel_id)
-    with open(output_filename, "w") as json_file:
-        json.dump(results, json_file, indent=4)
+    test_auc = roc_auc_score(test_label_all, test_prob_all)
+    return val_auc, test_auc
 
 
 def extract_epoch(filename):
@@ -120,48 +112,66 @@ def get_highest_epoch_file(files):
     return highest_epoch, highest_epoch_files
 
 
-sample_rate = 256
-eeg_type = 'stft'  # 'original', 'bipolar', 'stft'
-device = 'cuda:0' if tuh_args.cuda else 'cpu'
-# device = 'cpu'
+def test_models_with_nodes(num_nodes):
+    df = get_feasible_ids_with_num_nodes(num_nodes)
 
-# model = torch.load('inference_ck_0.9208', map_location=torch.device(device))
-root_path = tuh_args.save_directory
-if tuh_args.global_model:  # Global model
-    model_path = os.path.join(root_path, 'test_STFT8/model_17_0.9159300189983679')
-    print("Global Model ", model_path)
+    # Create a dataframe to store the results
+    results_df = pd.DataFrame(columns=['channel_id', 'val_auc', 'test_auc',
+                                       'experiment_name', 'model_name', 'number_nodes'])
 
-else:  # Channel_specific model
-    folder_path = os.path.join(root_path, 'test_8ch_{}'.format(tuh_args.selected_channel_id))
+    sample_rate = 256
+    eeg_type = 'stft'
+    device = 'cuda:0' if tuh_args.cuda else 'cpu'
+    print("device: ", device)
 
-    # Check if the folder exists. It means if we have trained a specific model
-    if os.path.exists(folder_path):
-        all_files = os.listdir(folder_path)
+    root_path = tuh_args.experiment_root
+    if tuh_args.global_model:  # Global model
+        model_path = os.path.join(root_path, 'global')
+        print("Global Model ", model_path)
 
-        # Filter files based on the pattern
-        matching_files = [file for file in all_files if file.startswith("model")]
-        if len(matching_files) > 0:
-            # Get the highest epoch and corresponding files
-            highest_epoch, highest_epoch_files = get_highest_epoch_file(matching_files)
-
-            model_path = os.path.join(folder_path, highest_epoch_files[0])
-            print("Channel-specific Model ", model_path)
-        else:
-            print("Channel-specific Folder exists but is empty.")
-            sys.exit(2)  # Exit with an error status code 2 to show that Channel-specific model does not exist
     else:
-        print("Channel-specific Folder does not exist")
-        sys.exit(2)  # Exit with an error status code 2 to show that Channel-specific model does not exist
+        # sample of the model path: output/model_8nodes/best_model.pth
+        model_path = os.path.join(root_path, 'model_{}nodes'.format(num_nodes),
+                                  'best_model.pth')
+
+    model = torch.load(model_path, map_location=torch.device(device)).float()
+    print(sum(p.numel() for p in model.parameters() if p.requires_grad))
+    model.eval()
+    sigmoid = nn.Sigmoid()
+
+    (train_data, _, _, _, _,
+     validation_signal, val_label,
+     test_signal, test_label) = \
+        get_data(save_dir=tuh_args.save_directory,
+                 balanced_data=True,
+                 return_val_test_signal=True,
+                 return_train_signal=False)
+    validation_signal = validation_signal.to(device)
+    test_signal = test_signal.to(device)
+
+    for i, row in tqdm(df.iterrows(), total=len(df), desc='Training '):
+        selected_channel_id = row['channel_id']
+        print("selected_channel_id: ", selected_channel_id)
+        val_auc, test_auc = inference(df, train_data, validation_signal, val_label, test_signal, test_label,
+                                      device, model, sigmoid,
+                                      selected_channel_id=selected_channel_id)
+        print("val_auc: ", val_auc)
+        print("test_auc: ", test_auc)
+        print("------------------------------------------------------")
+        # Placeholder for results
+        results = {'channel_id': selected_channel_id,
+                   'val_auc': val_auc,
+                   'test_auc': test_auc,
+                   'experiment_name': 'FETCH',
+                   'model_name': 'model_{}nodes'.format(num_nodes),
+                   'number_nodes': num_nodes}
+        # Concatenate the results
+        results_df = pd.concat([results_df, pd.DataFrame(results)], ignore_index=True)
+
+    # Save the results
+    results_df.to_csv(os.path.join(root_path, 'model_{}nodes'.format(num_nodes), 'results.csv'), index=False)
 
 
-model = torch.load(model_path,  map_location=torch.device(device)).float()
-print(sum(p.numel() for p in model.parameters() if p.requires_grad))
-model.eval()
-sigmoid = nn.Sigmoid()
-
-train_data, _, _, validation_signal, val_label, test_signal, test_label = get_data(save_dir = tuh_args.save_directory)
-validation_signal = validation_signal.to(device)
-test_signal = test_signal.to(device)
-
-for i in range(0, 10):
-    test_sample_base(i)
+if __name__ == '__main__':
+    num_nodes = 2
+    test_models_with_nodes(num_nodes)
