@@ -76,3 +76,10 @@ def get_feasible_ids_with_num_nodes(num_nodes):
     df['number_nodes'] = df['channel_list'].apply(channel_list_to_node_set)
     df_num_nodes = df[df['number_nodes'] == num_nodes]
     return df_num_nodes['channel_id'].tolist()
+
+
+def get_df_with_num_nodes(num_nodes):
+    df = create_dataframe(20)
+    df['number_nodes'] = df['channel_list'].apply(channel_list_to_node_set)
+    df_num_nodes = df[df['number_nodes'] == num_nodes]
+    return df_num_nodes

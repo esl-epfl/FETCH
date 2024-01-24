@@ -15,7 +15,7 @@ from TSD.code.tuh_dataset import get_data, get_dataloader
 from TSD.few_shot.support_set_const import seizure_support_set, non_seizure_support_set
 from TSD.code.utils import thresh_max_f1
 from TSD.code.utils import create_dataframe, channel_list_to_node_set
-from TSD.code.utils import get_feasible_ids_with_num_nodes
+from TSD.code.utils import get_df_with_num_nodes
 from sklearn.metrics import roc_auc_score, confusion_matrix, accuracy_score, f1_score
 
 from tqdm import tqdm
@@ -338,7 +338,7 @@ def eval():
     """
     options = get_parser().parse_args()
     num_nodes = options.num_nodes
-    df = get_feasible_ids_with_num_nodes(num_nodes)
+    df = get_df_with_num_nodes(num_nodes)
 
     # Create a dataframe to store the results
     results_df = pd.DataFrame(columns=['channel_id', 'val_auc', 'test_auc',
