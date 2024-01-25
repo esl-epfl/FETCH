@@ -121,7 +121,7 @@ def save_list_to_file(path, thelist):
 
 
 def get_mask(df=None, selected_channel_id=-1):
-    MASK = np.ones(20, dtype=np.int32)
+    MASK = np.ones(20, dtype=np.bool_)
 
     if selected_channel_id == -1:
         if df is None:
@@ -379,8 +379,7 @@ def eval():
                    'model_name': 'model_{}nodes'.format(num_nodes),
                    'number_nodes': num_nodes}
         # Concatenate the results
-        results_df = pd.concat([results_df, pd.DataFrame(results)], ignore_index=True)
-
+        results_df = pd.concat([results_df, pd.DataFrame.from_records([results])], ignore_index=True)
         # Save the results
     results_df.to_csv(os.path.join(options.experiment_root,
                                    'model_{}nodes'.format(num_nodes),
