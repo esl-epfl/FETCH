@@ -294,10 +294,10 @@ def inference_scratch_models():
                              return_val_test_signal=True,
                              return_train_signal=False)
 
-    save_directory = tuh_dataset.args.save_directory
+    experiment_root = tuh_dataset.args.experiment_root
     # Read all the directories in save_directory
-    model_dirs = [os.path.join(save_directory, d) for d in os.listdir(save_directory)
-                  if os.path.isdir(os.path.join(save_directory, d))]
+    model_dirs = [os.path.join(experiment_root, d) for d in os.listdir(experiment_root)
+                  if os.path.isdir(os.path.join(experiment_root, d))]
     # filter the directories based on their name test_x_y
     # x is the experiment name, and y is the channel_id
     # x can be SBS, SFS, scratch, or NSGA2
@@ -315,7 +315,7 @@ def inference_scratch_models():
             continue
         # get the experiment name and channel_id
         experiment_name = model_dir.split('/')[-1].split('_')[1]
-        if experiment_name not in ['scratch', 'SBS', 'SFS', 'NSGA']:
+        if experiment_name not in ['scratch', 'SBS', 'SFS', 'NSGA2']:
             continue
         channel_id = model_dir.split('/')[-1].split('_')[2]
 
@@ -350,7 +350,7 @@ def inference_scratch_models():
                                ignore_index=True)
 
     # save the updated df
-    scratch_df.to_csv(os.path.join(save_directory, 'scratch_models.csv'))
+    scratch_df.to_csv(os.path.join(experiment_root, 'scratch_models.csv'))
 
 
 if __name__ == '__main__':
