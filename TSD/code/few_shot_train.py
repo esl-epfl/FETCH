@@ -286,26 +286,27 @@ def test(opt, test_dataloader, val_dataloader, model, device,
 
     prototypes = get_prototypes(model_output, target=y_support_set).to(device)
 
-    val_prob_all = torch.zeros(len(val_dataloader.dataset), dtype=torch.float32).to(device)
-    val_label_all = torch.zeros(len(val_dataloader.dataset), dtype=torch.int).to(device)
-
-    for i, batch in enumerate(tqdm(val_dataloader)):
-        x, y = batch
-        x, y = x.to(device), y.to(device)
-        x[:, mask, :, :] = -1  # mask the channels
-        x = x.reshape((x.shape[0], 1, -1, x.shape[3]))
-        model_output = model(x)
-        prob, _ = prototypical_evaluation(prototypes, model_output)
-
-        start_idx = i * val_dataloader.batch_size
-        end_idx = start_idx + x.size(0)
-
-        val_prob_all[start_idx:end_idx] = prob.detach()
-        val_label_all[start_idx:end_idx] = y.detach()
-
-    val_label_all = val_label_all.cpu().numpy()
-    val_prob_all = val_prob_all.cpu().numpy()
-    val_auc = roc_auc_score(val_label_all, val_prob_all)
+    # val_prob_all = torch.zeros(len(val_dataloader.dataset), dtype=torch.float32).to(device)
+    # val_label_all = torch.zeros(len(val_dataloader.dataset), dtype=torch.int).to(device)
+    #
+    # for i, batch in enumerate(tqdm(val_dataloader)):
+    #     x, y = batch
+    #     x, y = x.to(device), y.to(device)
+    #     x[:, mask, :, :] = -1  # mask the channels
+    #     x = x.reshape((x.shape[0], 1, -1, x.shape[3]))
+    #     model_output = model(x)
+    #     prob, _ = prototypical_evaluation(prototypes, model_output)
+    #
+    #     start_idx = i * val_dataloader.batch_size
+    #     end_idx = start_idx + x.size(0)
+    #
+    #     val_prob_all[start_idx:end_idx] = prob.detach()
+    #     val_label_all[start_idx:end_idx] = y.detach()
+    #
+    # val_label_all = val_label_all.cpu().numpy()
+    # val_prob_all = val_prob_all.cpu().numpy()
+    # val_auc = roc_auc_score(val_label_all, val_prob_all)
+    val_auc = 0
 
     predict_prob = torch.zeros(len(test_dataloader.dataset), dtype=torch.float32).to(device)
     true_label = torch.zeros(len(test_dataloader.dataset), dtype=torch.int).to(device)
@@ -339,6 +340,8 @@ def eval():
     options = get_parser().parse_args()
     num_nodes = options.num_nodes
     df = get_df_with_num_nodes(num_nodes)
+    # shuffle df rows
+
 
     # Create a dataframe to store the results
     results_df = pd.DataFrame(columns=['channel_id', 'val_auc', 'test_auc',
@@ -381,6 +384,10 @@ def eval():
         # Concatenate the results
         results_df = pd.concat([results_df, pd.DataFrame.from_records([results])], ignore_index=True)
         # Save the results
+        if index % 300 == 299:
+            results_df.to_csv(os.path.join(options.experiment_root,
+                                           'model_{}nodes'.format(num_nodes),
+                                           'results.csv'), index=False)
     results_df.to_csv(os.path.join(options.experiment_root,
                                    'model_{}nodes'.format(num_nodes),
                                    'results.csv'), index=False)
