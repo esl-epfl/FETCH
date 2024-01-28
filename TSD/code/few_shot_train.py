@@ -286,27 +286,26 @@ def test(opt, test_dataloader, val_dataloader, model, device,
 
     prototypes = get_prototypes(model_output, target=y_support_set).to(device)
 
-    # val_prob_all = torch.zeros(len(val_dataloader.dataset), dtype=torch.float32).to(device)
-    # val_label_all = torch.zeros(len(val_dataloader.dataset), dtype=torch.int).to(device)
-    #
-    # for i, batch in enumerate(tqdm(val_dataloader)):
-    #     x, y = batch
-    #     x, y = x.to(device), y.to(device)
-    #     x[:, mask, :, :] = -1  # mask the channels
-    #     x = x.reshape((x.shape[0], 1, -1, x.shape[3]))
-    #     model_output = model(x)
-    #     prob, _ = prototypical_evaluation(prototypes, model_output)
-    #
-    #     start_idx = i * val_dataloader.batch_size
-    #     end_idx = start_idx + x.size(0)
-    #
-    #     val_prob_all[start_idx:end_idx] = prob.detach()
-    #     val_label_all[start_idx:end_idx] = y.detach()
-    #
-    # val_label_all = val_label_all.cpu().numpy()
-    # val_prob_all = val_prob_all.cpu().numpy()
-    # val_auc = roc_auc_score(val_label_all, val_prob_all)
-    val_auc = 0
+    val_prob_all = torch.zeros(len(val_dataloader.dataset), dtype=torch.float32).to(device)
+    val_label_all = torch.zeros(len(val_dataloader.dataset), dtype=torch.int).to(device)
+
+    for i, batch in enumerate(tqdm(val_dataloader)):
+        x, y = batch
+        x, y = x.to(device), y.to(device)
+        x[:, mask, :, :] = -1  # mask the channels
+        x = x.reshape((x.shape[0], 1, -1, x.shape[3]))
+        model_output = model(x)
+        prob, _ = prototypical_evaluation(prototypes, model_output)
+
+        start_idx = i * val_dataloader.batch_size
+        end_idx = start_idx + x.size(0)
+
+        val_prob_all[start_idx:end_idx] = prob.detach()
+        val_label_all[start_idx:end_idx] = y.detach()
+
+    val_label_all = val_label_all.cpu().numpy()
+    val_prob_all = val_prob_all.cpu().numpy()
+    val_auc = roc_auc_score(val_label_all, val_prob_all)
 
     predict_prob = torch.zeros(len(test_dataloader.dataset), dtype=torch.float32).to(device)
     true_label = torch.zeros(len(test_dataloader.dataset), dtype=torch.int).to(device)
