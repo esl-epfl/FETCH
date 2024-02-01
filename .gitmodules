@@ -1,0 +1,3 @@
+[submodule "epilepsy_performance_metrics"]
+	path = epilepsy_performance_metrics
+	url = https://github.com/esl-epfl/epilepsy_performance_metrics
