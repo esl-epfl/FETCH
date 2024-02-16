@@ -1,11 +1,10 @@
-import matplotlib.pyplot as plt
 import numpy as np
 from tqdm import tqdm
 
 import os
 import pickle
-from src.prepare_dataset import zero_crossings, calculateMovingAvrgMeanWithUndersampling_v2
-from src.prepare_dataset import calculateOtherMLfeatures_oneCh, polygonal_approx
+from src.code.prepare_dataset import zero_crossings, calculateMovingAvrgMeanWithUndersampling_v2
+from src.code.prepare_dataset import calculateOtherMLfeatures_oneCh
 
 from multiprocessing import Pool
 from functools import partial
